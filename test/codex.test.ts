@@ -24,6 +24,7 @@ const noSend = async () => ({ ok: false, message: 'No sends in this fixture.' })
 test('direct configured executable keeps static argv/cwd and stdin prompts, normal auth/config environment, explicit continuation and no Slack tokens', async t => {
   const { config, root, env, model } = fake(t);
   config.codex.args = ['--profile', 'fixture-profile', '-c', 'model_reasoning_effort="low"', '--strict-config'];
+  config.codex.sendToolApprovalMode = 'approve';
   Object.assign(env, { SLACK_BOT_TOKEN: 'xoxb-fixture', SLACK_APP_TOKEN: 'xapp-fixture', SLACK_SIGNING_SECRET: 'fixture-signing',
     ALIASED_SLACK_TOKEN: 'xoxb-fixture', OPENAI_API_KEY: 'fixture-provider-auth', HTTPS_PROXY: 'http://fixture.invalid', BRIDGE_SEND_TOKEN: 'stale-capability' });
   writeFileSync(path.join(env.CODEX_HOME!, 'config.toml'), 'model="fixture-existing-model"\n');
@@ -42,6 +43,8 @@ test('direct configured executable keeps static argv/cwd and stdin prompts, norm
     assert.notEqual(capture.env.BRIDGE_SEND_TOKEN, 'stale-capability');
     assert.equal(capture.cwd, config.codex.cwd);
     assert.deepEqual(capture.args.slice(0, config.codex.args.length), config.codex.args);
+    const senderOverride = capture.args.find((arg: string) => arg.startsWith(`mcp_servers.${MCP_NAME}=`));
+    assert.ok(senderOverride.includes('tools={send_message={approval_mode="approve"}}'));
     assert.ok(capture.args.includes('exec'));
     assert.ok(capture.args.includes('--json'));
     assert.equal(capture.args.at(-1), '-');
@@ -98,6 +101,7 @@ test('pinned real CLI no-model listing merges Bridge with fixture existing MCP a
   const content = '[mcp_servers.fixture]\ncommand="fixture-never-execute"\nargs=["fixture-arg"]\n\n[mcp_servers.fixture.env]\nFIXTURE_SETTING="keep-me"\n';
   writeFileSync(file, content);
   config.codex.args = ['--strict-config'];
+  config.codex.sendToolApprovalMode = 'approve';
   await preflight(config, env);
   assert.equal(await runLocalCli(config, ['--version'], env), `codex-cli ${CODEX_VERSION}`);
   const merged = await listMcp(config, true, env);

@@ -17,6 +17,7 @@ test('configuration rejects ambiguous routing, obsolete policies, command inject
     { codex: { ...config.codex, args: ['exec', 'a model prompt'] } },
     { codex: { ...config.codex, args: ['--last'] } },
     { codex: { ...config.codex, args: ['--profile'] } },
+    { codex: { ...config.codex, sendToolApprovalMode: 'allow-all' } },
   ]) assert.throws(() => parseConfig({ ...config, ...invalid }));
   const alias = path.join(root, 'alias'); symlinkSync(config.stateDir, alias);
   assert.throws(() => parseConfig({ ...config, stateDir: alias }), /symlink/);
@@ -32,6 +33,10 @@ test('normal configuration and explicit operator permissions are accepted; cwd i
   const result = parseConfig({ ...config, codex: { ...config.codex, cwd: alias, args: ['--profile', 'slack', '--sandbox', 'workspace-write'] }, secretEnvNames: ['FIXTURE_SECRET'] });
   assert.equal(result.codex.cwd, config.codex.cwd);
   assert.equal(result.mentionOnly, false);
+  assert.equal(result.codex.sendToolApprovalMode, undefined);
+  for (const mode of ['auto', 'prompt', 'writes', 'approve']) {
+    assert.equal(parseConfig({ ...config, codex: { ...config.codex, sendToolApprovalMode: mode } }).codex.sendToolApprovalMode, mode);
+  }
   assert.deepEqual(secretsFromEnvironment(result, { SLACK_BOT_TOKEN: 'fixture-token', FIXTURE_SECRET: 'fixture-secret', UNRELATED: 'do-not-use' }), ['fixture-token', 'fixture-secret']);
   const file = path.join(root, 'config.json'); writeFileSync(file, JSON.stringify(result));
   assert.deepEqual(loadConfig(file), result);

@@ -3,14 +3,16 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import type { SendMessage } from './send.js';
+import type { SendToolApprovalMode } from './config.js';
 
 export const MCP_NAME = 'techbase_bridge';
 export const MCP_ENTRY = fileURLToPath(new URL('./mcp-stdio.js', import.meta.url));
 export const MCP_ENV = ['BRIDGE_SEND_URL', 'BRIDGE_SEND_TOKEN'];
 
 /** Supported per-invocation Codex TOML override, never an operator file edit. */
-export function mcpOverrides(): string[] {
-  const table = `command=${JSON.stringify(process.execPath)},args=[${JSON.stringify(MCP_ENTRY)}],env_vars=${JSON.stringify(MCP_ENV)},enabled=true,required=true,tool_timeout_sec=120`;
+export function mcpOverrides(approvalMode?: SendToolApprovalMode): string[] {
+  const approval = approvalMode === undefined ? '' : `,tools={send_message={approval_mode=${JSON.stringify(approvalMode)}}}`;
+  const table = `command=${JSON.stringify(process.execPath)},args=[${JSON.stringify(MCP_ENTRY)}],env_vars=${JSON.stringify(MCP_ENV)},enabled=true,required=true,tool_timeout_sec=120${approval}`;
   return ['-c', `mcp_servers.${MCP_NAME}={${table}}`];
 }
 

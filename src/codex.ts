@@ -86,7 +86,7 @@ export async function listMcp(config: Config, includeBridge: boolean, env = proc
   // CLI 0.159.3 accepts this flag for exec but explicitly rejects it for mcp.
   // Keep it on real execution/help probes; omit it only on configuration listing.
   const listingConfig = { ...config, codex: { ...config.codex, args: config.codex.args.filter(arg => arg !== '--strict-config') } };
-  return JSON.parse(await runLocalCli(listingConfig, [...(includeBridge ? mcpOverrides() : []), 'mcp', 'list', '--json'], env));
+  return JSON.parse(await runLocalCli(listingConfig, [...(includeBridge ? mcpOverrides(config.codex.sendToolApprovalMode) : []), 'mcp', 'list', '--json'], env));
 }
 
 export async function preflight(config: Config, env = process.env): Promise<void> {
@@ -127,7 +127,7 @@ export class CodexModel implements Model {
     request.signal.throwIfAborted();
     const sender = await openSender(request.sendMessage);
     try {
-      const args = [...this.config.codex.args, ...mcpOverrides(), 'exec', '--json'];
+      const args = [...this.config.codex.args, ...mcpOverrides(this.config.codex.sendToolApprovalMode), 'exec', '--json'];
       if (request.threadId) args.push('resume', request.threadId);
       args.push('-');
       const context = `This request arrived through Slack Bridge. Use the ${MCP_NAME} MCP send_message tool to send plain text. Destination defaults to the originating thread (thread); configured channel aliases: ${Object.keys(this.config.outgoingChannels).join(', ') || '(none)'}. After any tool send, Bridge does not repeat your final answer. If you do not send through the tool, Bridge posts your final answer in the originating thread. Never retry an uncertain delivery.\n\nSlack message:\n`;
