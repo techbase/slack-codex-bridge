@@ -124,3 +124,33 @@ test('actual fake CLI invokes registered MCP stdio sender and Bridge suppresses 
   assert.equal(JSON.parse(readFileSync(path.join(root, 'tool-result.json'), 'utf8')).isError, false);
   assert.equal(store.latest({ team: config.teamId, channel: 'CPROJECT', root: '1800000000.000001', project: config.codex.cwd })?.state, 'completed');
 });
+
+
+test('preflight preserves MCP settings regardless of JSON key order and rejects actual changes or missing servers', async t => {
+  const { config, root, env } = fixture(t);
+  config.codex.executable = path.join(root, 'listing-codex');
+  writeFileSync(config.codex.executable, `#!${process.execPath}\n` + `
+const args = process.argv.slice(2);
+if (args.includes('--version')) {
+  console.log('codex-cli ${CODEX_VERSION}');
+} else if (args.includes('--help')) {
+  console.log('--json stdin SESSION_ID');
+} else if (args.includes('mcp') && args.includes('list')) {
+  const original = { name: 'fixture', enabled: true, transport: { command: 'fixture-never-run', env: { FIRST: 'one', SECOND: 'two' } } };
+  if (args.some(arg => arg.startsWith('mcp_servers.${MCP_NAME}='))) {
+    const reordered = { transport: { env: { SECOND: 'two', FIRST: 'one' }, command: 'fixture-never-run' }, enabled: true, name: 'fixture' };
+    if (process.env.FIXTURE_MCP_MODE === 'changed') reordered.transport.env.FIRST = 'changed';
+    const existing = process.env.FIXTURE_MCP_MODE === 'missing' ? [] : [reordered];
+    console.log(JSON.stringify([...existing, { name: '${MCP_NAME}', enabled: true }]));
+  } else {
+    console.log(JSON.stringify([original]));
+  }
+} else {
+  process.exitCode = 1;
+}
+`, { mode: 0o700 });
+  await preflight(config, env);
+  for (const mode of ['changed', 'missing']) {
+    await assert.rejects(preflight(config, { ...env, FIXTURE_MCP_MODE: mode }), /preserve existing MCP configuration/, mode);
+  }
+});

@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { isDeepStrictEqual } from 'node:util';
 import { SetupError, type Config } from './config.js';
 import { MCP_NAME, mcpOverrides, openSender } from './mcp.js';
 import type { SendMessage } from './send.js';
@@ -100,7 +101,7 @@ export async function preflight(config: Config, env = process.env): Promise<void
     if (!Array.isArray(existing) || existing.some(server => server?.name === MCP_NAME)) throw new SetupError(`The MCP name ${MCP_NAME} is reserved for Bridge; rename an existing entry before starting.`);
     const merged: unknown = await listMcp(config, true, env);
     if (!Array.isArray(merged) || !merged.some(server => server?.name === MCP_NAME && server.enabled === true)
-        || existing.some(server => !merged.some(item => item.name === server.name && JSON.stringify(item) === JSON.stringify(server)))) {
+        || existing.some(server => !merged.some(item => item.name === server.name && isDeepStrictEqual(item, server)))) {
       throw new SetupError('CLI did not preserve existing MCP configuration while adding Bridge.');
     }
   } catch (error) {
