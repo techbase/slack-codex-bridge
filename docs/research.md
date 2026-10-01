@@ -1,9 +1,8 @@
 # Scope decision — 1 October 2026
 
-The accepted product is a small public MIT Slack-to-CLI transport for an existing
-Codex runtime. The human clarification superseded the initial read-only project
-research pilot and its adoption experiment. See [the current brief](product-brief.md).
-Earlier rationale remains in Git history rather than a competing current contract.
+The product is a small public MIT Slack-to-CLI transport for an existing Codex
+runtime. Its job is to carry authorized messages between Slack and a predefined
+CLI invocation. See [the product brief](product-brief.md).
 
 Official Bolt Socket Mode supplies incoming transport. The pinned Codex CLI
 supplies supported noninteractive JSON/stdin/session interfaces. The official MCP

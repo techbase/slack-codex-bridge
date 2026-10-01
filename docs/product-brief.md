@@ -1,9 +1,8 @@
 # Product brief
 
-## Accepted scope — 1 October 2026 replacement
+## Scope
 
-A public MIT self-hosted Slack-to-Codex CLI transport. This contract replaces the
-previous read-only conversation pilot after PR #2; its history remains in Git.
+A public MIT self-hosted Slack-to-Codex CLI transport.
 The operator already has Codex working and wants authorized Slack messages to
 invoke it in a predefined fashion, plus a way for Codex to send messages to
 predefined Slack channels. Native machines, servers and suitable container
@@ -24,7 +23,7 @@ or resends an uncertain delivery. It uses the existing SQLite durable store.
 
 Setup is install/build, private Slack/routing/preset configuration, doctor, start.
 No new OS account, fresh login, mandatory isolated Codex home, installer, dashboard,
-hosted OAuth platform, scheduler or Runner dispatch loop. Claude/Pi may later use a
+hosted OAuth platform, scheduler or project orchestration. Claude/Pi may later use a
 similarly cohesive adapter but are not implemented or advertised as supported.
 
 ## Completion and evidence
@@ -43,6 +42,6 @@ CLI/state storage. An unavailable engine means packaging is unverified, never a
 reason to weaken CLI sandbox policy. Live Slack/model calls and host/container
 sandbox enforcement are separate integration checks, not inferred from fixtures.
 
-Runner owns implementation/review/evidence and PR publication. Human merge review
-and the trusted exact-head Operations ownership check remain required. This card
-has no release, deployment, privileged provisioning or sibling-project authority.
+Bridge has no required project-management or delivery system. The operator chooses
+what the CLI does and which development tools it uses; those workflows remain
+outside the bridge.

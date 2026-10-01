@@ -71,9 +71,6 @@ npm audit --audit-level=moderate
 
 Tests use fictional envelopes, SQLite, a real fake CLI executable, the official
 MCP client/server, stubbed Slack APIs and no-model probes of the pinned CLI.
-No real Slack installation/messages, model calls, credential copying or deployment
-are part of verification. Optional Docker packaging has **not been built or run**
-in the assignment environment: a Docker client exists but its daemon is unavailable.
-Native fixture checks do not prove Linux/container sandbox behavior or all Codex
-platforms. Runner publishes the candidate for human merge review; the coordinator
-runs trusted Operations `check-pr` against the exact reviewed head.
+These fixture checks do not verify live Slack delivery, provider authentication,
+model behavior or host/container sandbox enforcement. Optional Docker packaging
+has **not been built or run**; see [setup](docs/setup.md) for its verification limits.

@@ -163,9 +163,8 @@ recent dedup records, so account for Slack retry history before reconnecting.
 ## Optional Docker example — unverified
 
 [Dockerfile](../Dockerfile) and [examples/compose.yaml](../examples/compose.yaml)
-provide a non-root Linux container path. They have not been built/run in this
-assignment: the available Docker client reports no daemon at its configured socket. Compose configuration validation passed using the
-installed Compose plugin directly. Native macOS fixture results do not establish
+provide a non-root Linux container path. Compose configuration validation has
+passed, but the image has not been built or run. Fixture tests do not establish
 container or Linux sandbox behavior.
 
 Set the path variables shown in [examples/docker.env.example](../examples/docker.env.example)
@@ -190,8 +189,5 @@ No published ports, Docker socket mount, privileged mode, host networking or
 sandbox-bypass flags are included. An init process reaps children. Nested Codex
 sandboxing depends on host/kernel/container support and may fail; doctor does not
 exercise it. Do not disable the sandbox just to pass a smoke check. Select a
-compatible deployment or explicitly evaluate the operator's desired policy outside
-this implementation assignment. See the official
-[agent permissions guidance](https://learn.chatgpt.com/docs/agent-approvals-security).
-The supplied upstream `.devcontainer/README.md` link was unavailable during this
-review; it is not evidence that this example supports a particular nested sandbox.
+compatible deployment and explicitly evaluate the desired CLI policy. See the
+official [agent permissions guidance](https://learn.chatgpt.com/docs/agent-approvals-security).
