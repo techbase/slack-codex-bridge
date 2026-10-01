@@ -3,7 +3,7 @@ import test, { type TestContext } from 'node:test';
 import { Bridge, route } from '../src/bridge.js';
 import type { Config } from '../src/config.js';
 import { Store, type Scope } from '../src/store.js';
-import { ControlledModel, deferred, fixture, ManualClock, mention, NOW, RecordingSlack } from './helpers.js';
+import { ControlledModel, deferred, fixture, ManualClock, message, NOW, RecordingSlack } from './helpers.js';
 
 function setup(t: TestContext, overrides: Partial<Config> = {}) {
   const { config } = fixture(t, overrides);
@@ -14,29 +14,27 @@ function setup(t: TestContext, overrides: Partial<Config> = {}) {
   const logs: { reason: string; id?: string }[] = [];
   const bridge = new Bridge(config, store, model, slack, ['fixture-secret'], (reason, id) => logs.push({ reason, id }), clock);
   t.after(async () => { await bridge.shutdown(); store.close(); });
-  const scope: Scope = { team: config.teamId, channel: 'CPROJECT', root: '1800000000.000001', project: config.channels.CPROJECT! };
+  const scope: Scope = { team: config.teamId, channel: 'CPROJECT', root: '1800000000.000001', project: config.codex.cwd };
   return { config, store, model, slack, clock, bridge, logs, scope };
 }
 
-test('Slack authorization rejects workspace, channel, user, shared, bot, edit, system, stale and implicit events before persistence or reply', async t => {
+test('Slack authorization rejects workspace, channel, user, shared, bot, edit, system, stale events before persistence or reply', async t => {
   const { config, bridge, store, model, slack } = setup(t);
   const invalid = [
-    mention('wrong-team', 'question', {}, { team_id: 'TOTHER' }),
-    mention('wrong-user', 'question', { user: 'UEVE' }),
-    mention('wrong-channel', 'question', { channel: 'CUNKNOWN' }),
-    mention('wrong-event-team', 'question', { team: 'TOTHER' }),
-    mention('wrong-user-team', 'question', { user_team: 'TOTHER' }),
-    mention('shared', 'question', {}, { is_ext_shared_channel: true }),
-    mention('bot', 'question', { bot_id: 'BFIXTURE' }),
-    mention('own', 'question', { user: 'UBRIDGE' }),
-    mention('edit', 'question', { subtype: 'message_changed' }),
-    mention('edited', 'question', { edited: {} }),
-    mention('system', 'question', { type: 'message', subtype: 'channel_join' }),
-    mention('implicit', 'question', { text: 'Hello Bridge' }),
-    mention('escaped', 'question', { text: '&lt;@UBRIDGE&gt; hi' }),
-    mention('timestamp', 'question', { thread_ts: '<!channel>' }),
-    mention('old', 'question', {}, { event_time: (NOW - config.retentionMs) / 1000 - 1 }),
-    mention('future', 'question', {}, { event_time: NOW / 1000 + 301 }),
+    message('wrong-team', 'question', {}, { team_id: 'TOTHER' }),
+    message('wrong-user', 'question', { user: 'UEVE' }),
+    message('wrong-channel', 'question', { channel: 'CUNKNOWN' }),
+    message('wrong-event-team', 'question', { team: 'TOTHER' }),
+    message('wrong-user-team', 'question', { user_team: 'TOTHER' }),
+    message('shared', 'question', {}, { is_ext_shared_channel: true }),
+    message('bot', 'question', { bot_id: 'BFIXTURE' }),
+    message('own', 'question', { user: 'UBRIDGE' }),
+    message('edit', 'question', { subtype: 'message_changed' }),
+    message('edited', 'question', { edited: {} }),
+    message('system', 'question', { type: 'message', subtype: 'channel_join' }),
+    message('timestamp', 'question', { thread_ts: '<!channel>' }),
+    message('old', 'question', {}, { event_time: (NOW - config.retentionMs) / 1000 - 1 }),
+    message('future', 'question', {}, { event_time: NOW / 1000 + 301 }),
   ];
   for (const value of invalid) { assert.equal(route(config, value, NOW), undefined); await bridge.accept(value); }
   assert.deepEqual(store.counts(), { events: 0, jobs: 0, sessions: 0 });
@@ -44,17 +42,17 @@ test('Slack authorization rejects workspace, channel, user, shared, bot, edit, s
   assert.equal(slack.posts.length, 0);
 });
 
-test('mention routing fixes project and thread; help/status are deterministic, oversize input is not stored', async t => {
+test('ordinary message routing fixes project and thread; help/status are deterministic, oversize input is not stored', async t => {
   const { bridge, store, model, slack, scope } = setup(t, { maxInputChars: 30 });
-  await bridge.accept(mention('help', 'help'));
-  await bridge.accept(mention('status', 'status'));
-  await bridge.accept(mention('oversize', 'x'.repeat(31)));
+  await bridge.accept(message('help', 'help'));
+  await bridge.accept(message('status', 'status'));
+  await bridge.accept(message('oversize', 'x'.repeat(31)));
   assert.equal(store.counts().jobs, 0);
   assert.equal(model.calls.length, 0);
-  assert.match(slack.posts[0]!.text, /Read-only/);
+  assert.match(slack.posts[0]!.text, /existing permissions/);
   assert.match(slack.posts[1]!.text, /No requests/);
   assert.match(slack.posts[2]!.text, /too long/);
-  await bridge.accept(mention('question', 'cwd=/etc: explain this'));
+  await bridge.accept(message('question', 'cwd=/etc: explain this'));
   const call = await model.started(1);
   assert.equal(call.request.project, scope.project);
   assert.equal(store.thread(scope), 'fixture-thread-1');
@@ -68,9 +66,9 @@ test('mention routing fixes project and thread; help/status are deterministic, o
   }
 });
 
-test('duplicate events never queue or reply twice; follow-ups resume and new threads/channels/projects stay separate', async t => {
+test('duplicate events never queue or reply twice; follow-ups resume and new threads/channels stay separate', async t => {
   const { bridge, model, slack } = setup(t);
-  const original = mention('original');
+  const original = message('original');
   await bridge.accept(original);
   await bridge.accept(original);
   assert.equal(slack.posts.length, 1);
@@ -78,16 +76,16 @@ test('duplicate events never queue or reply twice; follow-ups resume and new thr
   first.result.resolve('First.'); await bridge.idle();
   await bridge.accept(original);
   assert.equal(model.calls.length, 1);
-  await bridge.accept(mention('followup', 'Correction', { ts: '1800000000.000002', thread_ts: '1800000000.000001' }));
+  await bridge.accept(message('followup', 'Correction', { ts: '1800000000.000002', thread_ts: '1800000000.000001' }));
   const next = await model.started(2);
   assert.equal(next.request.threadId, 'fixture-thread-1');
   next.result.resolve('Corrected.'); await bridge.idle();
   for (const [id, event] of [
     ['thread', { ts: '1800000000.000010' }],
     ['channel', { channel: 'CALIAS' }],
-    ['project', { channel: 'CSECOND' }],
+    ['second-channel', { channel: 'CSECOND' }],
   ] as const) {
-    await bridge.accept(mention(id, 'New question', event));
+    await bridge.accept(message(id, 'New question', event));
     const call = await model.started(model.calls.length);
     assert.equal(call.request.threadId, undefined);
     call.result.resolve('Separate.'); await bridge.idle();
@@ -95,86 +93,75 @@ test('duplicate events never queue or reply twice; follow-ups resume and new thr
   assert.equal(model.calls.length, 5);
 });
 
-test('bounded queue and global concurrency serialize aliases of a project and progress independently across projects', async t => {
-  const { bridge, model, slack } = setup(t, { maxPending: 3, maxConcurrentProjects: 2 });
-  await bridge.accept(mention('first'));
-  await bridge.accept(mention('same-project', 'Second', { channel: 'CALIAS' }));
-  await bridge.accept(mention('other-project', 'Third', { channel: 'CSECOND' }));
-  await bridge.accept(mention('full', 'Fourth'));
-  assert.equal(model.calls.length, 2);
-  assert.notEqual(model.calls[0]!.request.project, model.calls[1]!.request.project);
+test('bounded admission serializes the fixed CLI cwd across channels', async t => {
+  const { bridge, model, slack } = setup(t, { maxPending: 3 });
+  await bridge.accept(message('first'));
+  await bridge.accept(message('second', 'Second', { channel: 'CALIAS' }));
+  await bridge.accept(message('third', 'Third', { channel: 'CSECOND' }));
+  await bridge.accept(message('full', 'Fourth'));
+  assert.equal(model.calls.length, 1);
   assert.match(slack.posts.at(-1)!.text, /queue is full/);
   model.calls[0]!.result.resolve('First complete.');
-  const third = await model.started(3);
-  assert.equal(third.request.project, model.calls[0]!.request.project);
-  third.result.resolve('Second complete.');
-  model.calls[1]!.result.resolve('Other complete.');
-  await bridge.idle();
-});
-
-test('the global concurrency limit applies across different projects', async t => {
-  const { bridge, model } = setup(t, { maxConcurrentProjects: 1 });
-  await bridge.accept(mention('first-project'));
-  await bridge.accept(mention('second-project', 'Question', { channel: 'CSECOND' }));
-  assert.equal(model.calls.length, 1);
-  model.calls[0]!.result.resolve('First done.');
   const second = await model.started(2);
-  assert.notEqual(second.request.project, model.calls[0]!.request.project);
-  second.result.resolve('Second done.'); await bridge.idle();
+  assert.equal(second.request.project, model.calls[0]!.request.project);
+  second.result.resolve('Second complete.');
+  const third = await model.started(3);
+  third.result.resolve('Third complete.');
+  await bridge.idle();
 });
 
 test('requester and operator cancellation is thread-scoped and stops queued/active requests without replay', async t => {
   const { bridge, model, slack, store, scope } = setup(t);
-  await bridge.accept(mention('alice'));
-  await bridge.accept(mention('queued', 'Next'));
-  await bridge.accept(mention('bob-cancel', 'cancel', { user: 'UBOB' }));
+  await bridge.accept(message('alice'));
+  await bridge.accept(message('queued', 'Next'));
+  await bridge.accept(message('bob-cancel', 'cancel', { user: 'UBOB' }));
   assert.match(slack.posts.at(-1)!.text, /Only the requester/);
   assert.equal(model.calls[0]!.request.signal.aborted, false);
-  await bridge.accept(mention('other-thread', 'cancel', { ts: '1800000000.000003' }));
+  await bridge.accept(message('other-thread', 'cancel', { ts: '1800000000.000003' }));
   assert.equal(model.calls[0]!.request.signal.aborted, false);
-  await bridge.accept(mention('alice-cancel', 'cancel'));
+  await bridge.accept(message('alice-cancel', 'cancel'));
   await bridge.idle();
   assert.equal(model.calls.length, 1);
   assert.equal(model.calls[0]!.request.signal.aborted, true);
   assert.equal(store.latest(scope)?.state, 'cancelled');
-  await bridge.accept(mention('after-cancel', 'Try again'));
+  await bridge.accept(message('after-cancel', 'Try again'));
   const resumed = await model.started(2);
   assert.equal(resumed.request.threadId, 'fixture-thread-1');
-  await bridge.accept(mention('operator-cancel', 'cancel', { user: 'UOPERATOR' }));
+  await bridge.accept(message('operator-cancel', 'cancel', { user: 'UOPERATOR' }));
   await bridge.idle();
   assert.equal(resumed.request.signal.aborted, true);
 });
 
 test('timeout and queued expiry use controlled time and never overlap a previous turn', async t => {
   const { bridge, model, clock, store, scope } = setup(t, { turnTimeoutMs: 1000, queueTtlMs: 1000 });
-  await bridge.accept(mention('timeout'));
+  await bridge.accept(message('timeout'));
   const timedOutId = store.latest(scope)!.id;
-  await bridge.accept(mention('expires'));
+  await bridge.accept(message('expires'));
   clock.advance(1000);
   await bridge.idle();
   assert.equal(model.calls.length, 1);
   assert.equal(model.calls[0]!.request.signal.aborted, true);
   assert.equal(store.job(timedOutId)?.state, 'timed_out');
   assert.equal(store.latest(scope)?.state, 'interrupted');
-  await bridge.accept(mention('status', 'status'));
+  await bridge.accept(message('status', 'status'));
 });
 
 test('clean shutdown awaits cancellation, interrupts queued work and stops admission', async t => {
   const { bridge, model, store, scope, slack } = setup(t);
-  await bridge.accept(mention('active'));
-  await bridge.accept(mention('queued'));
+  await bridge.accept(message('active'));
+  await bridge.accept(message('queued'));
   await bridge.shutdown();
   assert.equal(model.calls.length, 1);
   assert.equal(model.calls[0]!.request.signal.aborted, true);
   assert.equal(store.latest(scope)?.state, 'interrupted');
   const before = slack.posts.length;
-  await bridge.accept(mention('after-shutdown'));
+  await bridge.accept(message('after-shutdown'));
   assert.equal(slack.posts.length, before);
 });
 
 test('model success with Slack delivery failure stays completed across duplicate events and restart', async t => {
   const { bridge, model, store, config, scope, slack, logs } = setup(t);
-  const event = mention('completed');
+  const event = message('completed');
   await bridge.accept(event);
   slack.failOn = 2;
   model.calls[0]!.result.resolve('The answer contains fixture-secret and <!channel> <@UALICE>.');
@@ -184,7 +171,7 @@ test('model success with Slack delivery failure stays completed across duplicate
   assert.match(slack.posts[1]!.text, /\[redacted\]/);
   assert.doesNotMatch(slack.posts[1]!.text, /fixture-secret|<!channel>|<@UALICE>/);
   await bridge.accept(event);
-  await bridge.accept(mention('status', 'status'));
+  await bridge.accept(message('status', 'status'));
   assert.match(slack.posts.at(-1)!.text, /completed.*uncertain/);
   assert.equal(model.calls.length, 1);
   assert.deepEqual(logs.map(log => log.reason), ['slack_delivery_uncertain']);
@@ -199,7 +186,7 @@ test('model success with Slack delivery failure stays completed across duplicate
 
 test('a long answer stops at an uncertain chunk and a duplicate event never resends or reruns it', async t => {
   const { bridge, model, store, scope, slack } = setup(t);
-  const event = mention('long-answer');
+  const event = message('long-answer');
   await bridge.accept(event);
   slack.failOn = 3; // Acknowledgement, delivered first chunk, uncertain second chunk.
   model.calls[0]!.result.resolve('x'.repeat(12_000));
@@ -216,10 +203,10 @@ test('a long answer stops at an uncertain chunk and a duplicate event never rese
 test('uncertain acknowledgement fails closed without launching a model; raw provider failures stay local-safe', async t => {
   const { bridge, model, slack, store, scope, logs } = setup(t);
   slack.failOn = 1;
-  await bridge.accept(mention('ack-fails'));
+  await bridge.accept(message('ack-fails'));
   assert.equal(model.calls.length, 0);
   assert.equal(store.latest(scope)?.state, 'interrupted');
-  await bridge.accept(mention('model-fails'));
+  await bridge.accept(message('model-fails'));
   model.calls[0]!.result.reject(new Error('PRIVATE provider payload fixture-secret'));
   await bridge.idle();
   assert.equal(store.latest(scope)?.state, 'failed');
@@ -238,9 +225,9 @@ test('cancel waits for model settlement before reusing a project, even if the mo
     second.resolve(); return 'Next answer';
   } }, new RecordingSlack(), [], () => {}, new ManualClock());
   t.after(async () => { gate.resolve('Late result'); await bridge.shutdown(); store.close(); });
-  await bridge.accept(mention('first'));
-  await bridge.accept(mention('next', 'Question', { user: 'UBOB' }));
-  await bridge.accept(mention('cancel-first', 'cancel'));
+  await bridge.accept(message('first'));
+  await bridge.accept(message('next', 'Question', { user: 'UBOB' }));
+  await bridge.accept(message('cancel-first', 'cancel'));
   assert.equal(started[0]!.aborted, true);
   assert.equal(started.length, 1);
   gate.resolve('Late result');
@@ -255,8 +242,8 @@ test('acknowledgement failure after queued cancellation preserves cancellation a
     slack.posts.push(message);
     if (message.text.startsWith('Queued')) { await ack.promise; throw new Error('uncertain ack'); }
   };
-  const question = bridge.accept(mention('queued'));
-  await bridge.accept(mention('cancel', 'cancel'));
+  const question = bridge.accept(message('queued'));
+  await bridge.accept(message('cancel', 'cancel'));
   ack.resolve(); await question;
   assert.equal(model.calls.length, 0);
   assert.equal(store.latest(scope)?.state, 'cancelled');
@@ -278,8 +265,8 @@ test('an active cancellation send failure stays uncertain even when the cancel c
     if (message.text.startsWith('Cancellation requested')) await control.promise;
     if (message.text.includes('cancelled. No automatic retry.')) throw new Error('uncertain outcome');
   };
-  await bridge.accept(mention('active'));
-  const cancelling = bridge.accept(mention('cancel', 'cancel'));
+  await bridge.accept(message('active'));
+  const cancelling = bridge.accept(message('cancel', 'cancel'));
   await storedUncertain.promise;
   control.resolve(); await cancelling; await bridge.idle();
   assert.equal(store.latest(scope)?.state, 'cancelled');
@@ -293,8 +280,8 @@ test('a slow acknowledgement cannot reorder queued questions for the same projec
     slack.posts.push(message);
     if (slack.posts.length === 1) await firstAck.promise;
   };
-  const first = bridge.accept(mention('first', 'First question'));
-  await bridge.accept(mention('followup', 'Second question'));
+  const first = bridge.accept(message('first', 'First question'));
+  await bridge.accept(message('followup', 'Second question'));
   assert.equal(model.calls.length, 0);
   firstAck.resolve(); await first;
   const call = await model.started(1);
@@ -315,14 +302,65 @@ test('unexpected persistence failure stops admission, aborts work and reports on
   let fatal = 0;
   const bridge = new Bridge(config, store, model, slack, [], reason => logs.push(reason), new ManualClock(), () => { fatal++; });
   t.after(async () => { await bridge.shutdown(); store.close(); });
-  await bridge.accept(mention('active'));
+  await bridge.accept(message('active'));
   store.cleanup = () => { throw new Error('PRIVATE persistence payload'); };
   bridge.start();
   await bridge.shutdown();
-  await bridge.accept(mention('after-failure'));
+  await bridge.accept(message('after-failure'));
   assert.equal(fatal, 1);
   assert.equal(model.calls.length, 1);
   assert.equal(model.calls[0]!.request.signal.aborted, true);
   assert.deepEqual(logs, ['maintenance_failed']);
   assert.doesNotMatch(JSON.stringify(slack.posts), /PRIVATE/);
+});
+
+test('mention-only mode filters ordinary text before storage but accepts an explicit mention through the same message event', async t => {
+  const { config, bridge, store, model } = setup(t, { mentionOnly: true });
+  for (const text of ['Hello Bridge', '&lt;@UBRIDGE&gt; hi']) {
+    const body = message('implicit-' + text.length, text);
+    assert.equal(route(config, body, NOW), undefined);
+    await bridge.accept(body);
+  }
+  assert.deepEqual(store.counts(), { events: 0, jobs: 0, sessions: 0 });
+  await bridge.accept(message('explicit', '<@UBRIDGE> Follow up'));
+  const call = await model.started(1);
+  assert.equal(call.request.prompt, 'Follow up');
+  call.result.resolve('Answer'); await bridge.idle();
+});
+
+test('tool success or uncertainty suppresses final fallback, including a later CLI failure; duplicates never rerun', async t => {
+  for (const uncertain of [false, true]) {
+    const { bridge, model, store, scope, slack } = setup(t);
+    const event = message('tool-' + uncertain);
+    await bridge.accept(event);
+    if (uncertain) slack.failOn = 2;
+    const call = await model.started(1);
+    const sent = await call.request.sendMessage({ text: 'Tool answer' });
+    assert.equal(sent.ok, !uncertain);
+    if (uncertain) {
+      assert.equal((await call.request.sendMessage({ text: 'Do not duplicate' })).ok, false);
+      call.result.resolve('Do not duplicate final');
+    } else call.result.reject(new Error('PRIVATE provider error after tool success'));
+    await bridge.idle();
+    assert.equal(slack.posts.length, 2);
+    assert.equal(store.latest(scope)?.state, uncertain ? 'completed' : 'failed');
+    assert.equal(store.latest(scope)?.delivery, uncertain ? 'uncertain' : 'sent');
+    await bridge.accept(event);
+    assert.equal(slack.posts.length, 2);
+    assert.equal(model.calls.length, 1);
+  }
+});
+
+test('absent final output without a tool send fails; a rejected destination still allows final fallback', async t => {
+  const { bridge, model, store, scope, slack } = setup(t);
+  await bridge.accept(message('empty'));
+  model.calls[0]!.result.resolve(''); await bridge.idle();
+  assert.equal(store.latest(scope)?.state, 'failed');
+  assert.match(slack.posts.at(-1)!.text, /invalid_result/);
+  await bridge.accept(message('bad-destination'));
+  const call = await model.started(2);
+  assert.equal((await call.request.sendMessage({ text: 'No', destination: 'CARBITRARY' })).ok, false);
+  call.result.resolve('Allowed thread fallback'); await bridge.idle();
+  assert.equal(store.latest(scope)?.state, 'completed');
+  assert.match(slack.posts.at(-1)!.text, /Allowed thread fallback/);
 });

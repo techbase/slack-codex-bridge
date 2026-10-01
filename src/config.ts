@@ -1,5 +1,4 @@
 import { lstatSync, readFileSync, realpathSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
 import path from 'node:path';
 
 export class SetupError extends Error {}
@@ -9,12 +8,12 @@ export interface Config {
   botUserId: string;
   allowedUserIds: string[];
   operatorUserIds: string[];
-  channels: Record<string, string>;
+  incomingChannelIds: string[];
+  outgoingChannels: Record<string, string>;
+  mentionOnly: boolean;
+  codex: { executable: string; args: string[]; cwd: string };
   stateDir: string;
-  codexHome: string;
-  hostPolicyReviewed: true;
   maxPending: number;
-  maxConcurrentProjects: number;
   maxInputChars: number;
   maxOutputChars: number;
   turnTimeoutMs: number;
@@ -25,14 +24,9 @@ export interface Config {
 }
 
 const defaults = {
-  maxPending: 20,
-  maxConcurrentProjects: 2,
-  maxInputChars: 12_000,
-  maxOutputChars: 24_000,
-  turnTimeoutMs: 300_000,
-  queueTtlMs: 900_000,
-  retentionMs: 7 * 86_400_000,
-  maxRetainedEvents: 10_000,
+  maxPending: 20, maxInputChars: 12_000, maxOutputChars: 24_000,
+  turnTimeoutMs: 300_000, queueTtlMs: 900_000,
+  retentionMs: 7 * 86_400_000, maxRetainedEvents: 10_000,
 };
 
 export function privateDirectory(value: unknown, label: string): string {
@@ -41,12 +35,8 @@ export function privateDirectory(value: unknown, label: string): string {
   }
   let info;
   let real;
-  try {
-    info = lstatSync(value);
-    real = realpathSync(value);
-  } catch {
-    throw new SetupError(`${label} is not accessible; create it with mode 0700.`);
-  }
+  try { info = lstatSync(value); real = realpathSync(value); }
+  catch { throw new SetupError(`${label} is not accessible; create it with mode 0700.`); }
   if (!info.isDirectory() || info.isSymbolicLink() || real !== path.normalize(value)
       || (info.mode & 0o777) !== 0o700 || info.uid !== process.getuid?.()) {
     throw new SetupError(`${label} must be owned by this account, mode 0700, and have no symlink components.`);
@@ -54,11 +44,9 @@ export function privateDirectory(value: unknown, label: string): string {
   return real;
 }
 
-export function isWithin(parent: string, child: string): boolean {
-  const relative = path.relative(parent, child);
-  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
+function object(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
-
 function identities(value: unknown, pattern: RegExp, label: string, allowEmpty = false): string[] {
   if (!Array.isArray(value) || (!allowEmpty && value.length === 0) || value.length > 1000
       || !value.every(id => typeof id === 'string' && pattern.test(id))) {
@@ -67,56 +55,65 @@ function identities(value: unknown, pattern: RegExp, label: string, allowEmpty =
   return [...new Set(value as string[])];
 }
 
+// Only global CLI options: a preset cannot accidentally turn a doctor/list probe
+// into a model command. Values remain operator-owned, including permission policy.
+export function validateArgs(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length > 100 || !value.every(arg => typeof arg === 'string' && arg.length <= 8000 && !arg.includes('\0'))) {
+    throw new SetupError('codex.args must be a bounded array of global Codex options.');
+  }
+  const withValue = new Set(['-c', '--config', '-p', '--profile', '-m', '--model', '-s', '--sandbox', '-a', '--ask-for-approval', '--enable', '--disable', '--local-provider', '--add-dir']);
+  const flags = new Set(['--oss', '--search', '--approve-for-me', '--dangerously-bypass-approvals-and-sandbox', '--dangerously-bypass-hook-trust', '--no-daemon', '--strict-config']);
+  for (let i = 0; i < value.length; i++) {
+    const arg = value[i] as string;
+    if (flags.has(arg)) continue;
+    if (!withValue.has(arg) || typeof value[++i] !== 'string' || value[i] === '') {
+      throw new SetupError('codex.args accepts documented global option/value pairs and flags only; Bridge supplies exec, stdin, JSON and cwd.');
+    }
+    if ((arg === '-c' || arg === '--config') && !/^[A-Za-z0-9_.-]+=/.test(value[i])) {
+      throw new SetupError('Codex config overrides must use key=value.');
+    }
+  }
+  return [...value];
+}
+
 export function parseConfig(input: unknown): Config {
   const [major, minor] = process.versions.node.split('.').map(Number);
   if (major! < 24 || (major === 24 && minor! < 16) || !['darwin', 'linux'].includes(process.platform)) {
-    throw new SetupError('Use Node 24.16.0 or newer on macOS or Linux; other execution boundaries are unsupported.');
+    throw new SetupError('Use Node 24.16.0 or newer on macOS or Linux (including Linux containers).');
   }
-  if (process.getuid?.() === 0) throw new SetupError('Run Bridge as a dedicated unprivileged account, never root.');
-  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new SetupError('Configuration must be a JSON object.');
-  const raw = input as Record<string, unknown>;
-  const keys = new Set(['teamId', 'botUserId', 'allowedUserIds', 'operatorUserIds', 'channels', 'stateDir', 'codexHome', 'hostPolicyReviewed', 'secretEnvNames', ...Object.keys(defaults)]);
-  if (Object.keys(raw).some(key => !keys.has(key))) throw new SetupError('Unknown configuration key; arbitrary SDK or executable overrides are not supported.');
+  if (!object(input)) throw new SetupError('Configuration must be a JSON object.');
+  const raw = input;
+  const keys = new Set(['teamId', 'botUserId', 'allowedUserIds', 'operatorUserIds', 'incomingChannelIds', 'outgoingChannels', 'mentionOnly', 'codex', 'stateDir', 'secretEnvNames', ...Object.keys(defaults)]);
+  if (Object.keys(raw).some(key => !keys.has(key))) throw new SetupError('Unknown configuration key; migrate old pilot configuration using the current example.');
   const teamId = identities([raw.teamId], /^T[A-Z0-9]{2,30}$/, 'teamId')[0]!;
   const botUserId = identities([raw.botUserId], /^[UW][A-Z0-9]{2,30}$/, 'botUserId')[0]!;
   const allowedUserIds = identities(raw.allowedUserIds, /^[UW][A-Z0-9]{2,30}$/, 'allowedUserIds');
   const operatorUserIds = identities(raw.operatorUserIds ?? [], /^[UW][A-Z0-9]{2,30}$/, 'operatorUserIds', true);
   if (operatorUserIds.some(id => !allowedUserIds.includes(id))) throw new SetupError('Operators must also be allowed users.');
-  if (raw.hostPolicyReviewed !== true) {
-    throw new SetupError('Review the dedicated OS account and host Codex policy prerequisites, then set hostPolicyReviewed to true.');
+  const incomingChannelIds = identities(raw.incomingChannelIds, /^[CG][A-Z0-9]{2,30}$/, 'incomingChannelIds');
+  if (!object(raw.outgoingChannels) || Object.keys(raw.outgoingChannels).length > 100) throw new SetupError('outgoingChannels must map up to 100 aliases to Slack channel IDs (or be empty for thread replies only).');
+  const outgoingChannels: Record<string, string> = {};
+  for (const [alias, channel] of Object.entries(raw.outgoingChannels)) {
+    if (!/^[a-z][a-z0-9_-]{0,39}$/.test(alias) || ['thread', '__proto__', 'constructor', 'prototype'].includes(alias)
+        || typeof channel !== 'string' || !/^[CG][A-Z0-9]{2,30}$/.test(channel)) throw new SetupError('Invalid outgoing alias or Slack channel ID; thread is reserved for originating-thread replies.');
+    outgoingChannels[alias] = channel;
   }
+  if (raw.mentionOnly !== undefined && typeof raw.mentionOnly !== 'boolean') throw new SetupError('mentionOnly must be boolean.');
+  if (!object(raw.codex) || Object.keys(raw.codex).some(key => !['executable', 'args', 'cwd'].includes(key))) throw new SetupError('codex must define executable, args and cwd.');
+  const { executable, cwd } = raw.codex;
+  if (typeof executable !== 'string' || !executable || executable.includes('\0') || (!path.isAbsolute(executable) && !/^[a-zA-Z0-9_.-]+$/.test(executable))) {
+    throw new SetupError('codex.executable must be an absolute path or an executable name resolved on PATH.');
+  }
+  if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) throw new SetupError('codex.cwd must be an existing absolute directory.');
+  let real;
+  try { real = realpathSync(cwd); if (!statSync(real).isDirectory()) throw new Error(); }
+  catch { throw new SetupError('codex.cwd is not an accessible directory.'); }
+  const codex = { executable, args: validateArgs(raw.codex.args ?? []), cwd: real };
   const stateDir = privateDirectory(raw.stateDir, 'stateDir');
-  const codexHome = privateDirectory(raw.codexHome, 'codexHome');
-  const personalHomes = [path.join(homedir(), '.codex'), process.env.CODEX_HOME].filter((p): p is string => !!p).map(p => {
-    try { return realpathSync(p); } catch { return path.resolve(p); }
-  });
-  if (personalHomes.some(p => isWithin(p, codexHome)) || isWithin(stateDir, codexHome) || isWithin(codexHome, stateDir)) {
-    throw new SetupError('Use separate, dedicated state and Codex directories, outside the inherited Codex home.');
-  }
-  if (!raw.channels || typeof raw.channels !== 'object' || Array.isArray(raw.channels)) throw new SetupError('channels must map Slack channel IDs to existing Git project roots.');
-  const entries = Object.entries(raw.channels);
-  if (entries.length === 0 || entries.length > 100) throw new SetupError('Configure between 1 and 100 channels.');
-  const channels: Record<string, string> = {};
-  for (const [channel, directory] of entries) {
-    if (!/^[CG][A-Z0-9]{2,30}$/.test(channel) || typeof directory !== 'string' || !path.isAbsolute(directory)) {
-      throw new SetupError('Each channel must have a Slack ID and an absolute project path.');
-    }
-    let real;
-    try {
-      real = realpathSync(directory);
-      if (!statSync(real).isDirectory() || !lstatSync(path.join(real, '.git'))) throw new Error();
-    } catch {
-      throw new SetupError('Each configured project must be an accessible Git root (including worktrees).');
-    }
-    if (isWithin(real, stateDir) || isWithin(real, codexHome) || isWithin(stateDir, real) || isWithin(codexHome, real)) {
-      throw new SetupError('Private state and Codex home must be separate from project trees.');
-    }
-    channels[channel] = real;
-  }
   const limits = { ...defaults };
   const bounds: Record<keyof typeof defaults, [number, number]> = {
-    maxPending: [1, 1000], maxConcurrentProjects: [1, 8], maxInputChars: [1, 40_000],
-    maxOutputChars: [100, 48_000], turnTimeoutMs: [1000, 1_800_000], queueTtlMs: [1000, 86_400_000],
+    maxPending: [1, 1000], maxInputChars: [1, 40_000], maxOutputChars: [100, 48_000],
+    turnTimeoutMs: [1000, 1_800_000], queueTtlMs: [1000, 86_400_000],
     retentionMs: [60_000, 30 * 86_400_000], maxRetainedEvents: [10, 100_000],
   };
   for (const key of Object.keys(defaults) as (keyof typeof defaults)[]) {
@@ -127,7 +124,7 @@ export function parseConfig(input: unknown): Config {
   }
   if (limits.retentionMs < limits.queueTtlMs) throw new SetupError('retentionMs must be at least queueTtlMs.');
   const secretEnvNames = identities(raw.secretEnvNames ?? [], /^[A-Z_][A-Z0-9_]{0,99}$/, 'secretEnvNames', true);
-  return { teamId, botUserId, allowedUserIds, operatorUserIds, channels, stateDir, codexHome, hostPolicyReviewed: true, secretEnvNames, ...limits };
+  return { teamId, botUserId, allowedUserIds, operatorUserIds, incomingChannelIds, outgoingChannels, mentionOnly: raw.mentionOnly ?? false, codex, stateDir, secretEnvNames, ...limits };
 }
 
 export function loadConfig(file: string): Config {
@@ -136,13 +133,11 @@ export function loadConfig(file: string): Config {
     const info = lstatSync(file);
     if (!info.isFile() || info.size > 128_000) throw new Error();
     raw = JSON.parse(readFileSync(file, 'utf8'));
-  } catch {
-    throw new SetupError('Cannot read configuration JSON; use the documented BRIDGE_CONFIG file.');
-  }
+  } catch { throw new SetupError('Cannot read configuration JSON; use the documented BRIDGE_CONFIG file.'); }
   return parseConfig(raw);
 }
 
 export function secretsFromEnvironment(config: Config, env = process.env): string[] {
-  return ['SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN', ...config.secretEnvNames]
+  return [...Object.keys(env).filter(name => /^SLACK_/i.test(name)), ...config.secretEnvNames]
     .map(name => env[name]).filter((value): value is string => !!value);
 }

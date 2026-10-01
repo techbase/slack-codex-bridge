@@ -1,30 +1,32 @@
 import { mkdtempSync, mkdirSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { TestContext } from 'node:test';
 import { parseConfig, type Config } from '../src/config.js';
 import type { Clock } from '../src/bridge.js';
 import type { Model, ModelRequest } from '../src/codex.js';
 import type { SlackPost, SlackSender } from '../src/output.js';
 
-export function fixture(t: TestContext, overrides: Partial<Config> = {}): { root: string; config: Config; project2: string } {
+export function fixture(t: TestContext, overrides: Partial<Config> = {}): { root: string; config: Config; project2: string; env: NodeJS.ProcessEnv } {
   const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'bridge-test-')));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   for (const directory of ['state', 'codex', 'project', 'project2']) mkdirSync(path.join(root, directory), { mode: 0o700 });
   for (const directory of ['project', 'project2']) mkdirSync(path.join(root, directory, '.git'));
   const project2 = path.join(root, 'project2');
   const config = parseConfig({ teamId: 'TEXAMPLE', botUserId: 'UBRIDGE', allowedUserIds: ['UALICE', 'UBOB', 'UOPERATOR'], operatorUserIds: ['UOPERATOR'],
-    channels: { CPROJECT: path.join(root, 'project'), CSECOND: project2, CALIAS: path.join(root, 'project') },
-    stateDir: path.join(root, 'state'), codexHome: path.join(root, 'codex'), hostPolicyReviewed: true,
+    incomingChannelIds: ['CPROJECT', 'CSECOND', 'CALIAS'], outgoingChannels: { updates: 'CUPDATES' },
+    codex: { executable: fileURLToPath(new URL('../../node_modules/.bin/codex', import.meta.url)), args: [], cwd: path.join(root, 'project') },
+    stateDir: path.join(root, 'state'),
     ...overrides });
-  return { root, config, project2 };
+  return { root, config, project2, env: { HOME: root, CODEX_HOME: path.join(root, 'codex'), PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`, OPENSSL_CONF: '/dev/null' } };
 }
 
 export const NOW = 1_800_000_000_000;
-export function mention(id: string, text = 'Explain the code', event: Record<string, unknown> = {}, body: Record<string, unknown> = {}) {
+export function message(id: string, text = 'Explain the code', event: Record<string, unknown> = {}, body: Record<string, unknown> = {}) {
   return { type: 'event_callback', team_id: 'TEXAMPLE', api_app_id: 'AEXAMPLE', event_id: id, event_time: NOW / 1000,
     authorizations: [{ team_id: 'TEXAMPLE', user_id: 'UBRIDGE', is_bot: true }],
-    event: { type: 'app_mention', user: 'UALICE', channel: 'CPROJECT', ts: '1800000000.000001', text: `<@UBRIDGE> ${text}`, ...event }, ...body };
+    event: { type: 'message', user: 'UALICE', channel: 'CPROJECT', ts: '1800000000.000001', text, ...event }, ...body };
 }
 
 export class ManualClock implements Clock {

@@ -23,7 +23,7 @@ export function slackChunks(text: string, secrets: string[], maxChars: number): 
 
 export interface SlackPost {
   channel: string;
-  thread_ts: string;
+  thread_ts?: string;
   text: string;
   mrkdwn: false;
   parse: 'none';
@@ -34,7 +34,7 @@ export interface SlackPost {
 
 export interface SlackSender { post(message: SlackPost): Promise<void> }
 
-export async function sendText(sender: SlackSender, channel: string, thread: string, text: string, secrets: string[], maxChars: number): Promise<void> {
+export async function sendText(sender: SlackSender, channel: string, thread: string | undefined, text: string, secrets: string[], maxChars: number): Promise<void> {
   for (const chunk of slackChunks(text, secrets, maxChars)) {
     await sender.post({ channel, thread_ts: thread, text: chunk, mrkdwn: false, parse: 'none', link_names: false, unfurl_links: false, unfurl_media: false });
   }

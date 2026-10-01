@@ -4,9 +4,9 @@ import { App } from '@slack/bolt';
 import { Bridge } from '../src/bridge.js';
 import { Store } from '../src/store.js';
 import { appOptions, safeLogger, slackSender, verifySlackIdentity, wireSlack } from '../src/slack.js';
-import { ControlledModel, fixture, ManualClock, mention, NOW } from './helpers.js';
+import { ControlledModel, fixture, ManualClock, message, NOW } from './helpers.js';
 
-test('real Bolt event boundary and WebClient use explicit mentions, one ack, thread-only safe output and no HTTP receiver', async t => {
+test('real Bolt event boundary and WebClient accept ordinary human messages, one ack, thread-only safe output and no HTTP receiver', async t => {
   const { config } = fixture(t);
   const store = new Store(config, NOW);
   const logs: string[] = [];
@@ -28,7 +28,7 @@ test('real Bolt event boundary and WebClient use explicit mentions, one ack, thr
   t.after(async () => { await bridge.shutdown(); store.close(); });
   wireSlack(app, bridge, diagnostic);
   let acknowledgements = 0;
-  await app.processEvent({ body: mention('real-bolt'), ack: async () => { acknowledgements++; } });
+  await app.processEvent({ body: message('real-bolt'), ack: async () => { acknowledgements++; } });
   const call = await model.started(1);
   call.result.resolve('Answer with <!channel> and a file src/example.ts.');
   await bridge.idle();
@@ -47,7 +47,7 @@ test('real Bolt event boundary and WebClient use explicit mentions, one ack, thr
   }
   assert.match(new URLSearchParams(posts[1]!.body).get('text')!, /&lt;!channel&gt;/);
   const previous = calls.filter(call => call.url.endsWith('/chat.postMessage')).length;
-  await app.processEvent({ body: mention('unauthorized', 'Question', { user: 'UEVE' }), ack: async () => {} });
+  await app.processEvent({ body: message('unauthorized', 'Question', { user: 'UEVE' }), ack: async () => {} });
   assert.equal(calls.filter(call => call.url.endsWith('/chat.postMessage')).length, previous);
   assert.equal(model.calls.length, 1);
   assert.deepEqual(logs, []);
