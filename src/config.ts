@@ -3,6 +3,8 @@ import path from 'node:path';
 
 export class SetupError extends Error {}
 
+export type SendToolApprovalMode = 'auto' | 'prompt' | 'writes' | 'approve';
+
 export interface Config {
   teamId: string;
   botUserId: string;
@@ -11,7 +13,7 @@ export interface Config {
   incomingChannelIds: string[];
   outgoingChannels: Record<string, string>;
   mentionOnly: boolean;
-  codex: { executable: string; args: string[]; cwd: string };
+  codex: { executable: string; args: string[]; cwd: string; sendToolApprovalMode?: SendToolApprovalMode };
   stateDir: string;
   maxPending: number;
   maxInputChars: number;
@@ -99,8 +101,12 @@ export function parseConfig(input: unknown): Config {
     outgoingChannels[alias] = channel;
   }
   if (raw.mentionOnly !== undefined && typeof raw.mentionOnly !== 'boolean') throw new SetupError('mentionOnly must be boolean.');
-  if (!object(raw.codex) || Object.keys(raw.codex).some(key => !['executable', 'args', 'cwd'].includes(key))) throw new SetupError('codex must define executable, args and cwd.');
-  const { executable, cwd } = raw.codex;
+  if (!object(raw.codex) || Object.keys(raw.codex).some(key => !['executable', 'args', 'cwd', 'sendToolApprovalMode'].includes(key))) throw new SetupError('codex must define executable, args and cwd.');
+  const { executable, cwd, sendToolApprovalMode } = raw.codex;
+  if (sendToolApprovalMode !== undefined && sendToolApprovalMode !== 'auto' && sendToolApprovalMode !== 'prompt'
+      && sendToolApprovalMode !== 'writes' && sendToolApprovalMode !== 'approve') {
+    throw new SetupError('codex.sendToolApprovalMode must be auto, prompt, writes or approve when configured.');
+  }
   if (typeof executable !== 'string' || !executable || executable.includes('\0') || (!path.isAbsolute(executable) && !/^[a-zA-Z0-9_.-]+$/.test(executable))) {
     throw new SetupError('codex.executable must be an absolute path or an executable name resolved on PATH.');
   }
@@ -108,7 +114,8 @@ export function parseConfig(input: unknown): Config {
   let real;
   try { real = realpathSync(cwd); if (!statSync(real).isDirectory()) throw new Error(); }
   catch { throw new SetupError('codex.cwd is not an accessible directory.'); }
-  const codex = { executable, args: validateArgs(raw.codex.args ?? []), cwd: real };
+  const codex: Config['codex'] = { executable, args: validateArgs(raw.codex.args ?? []), cwd: real,
+    ...(sendToolApprovalMode === undefined ? {} : { sendToolApprovalMode }) };
   const stateDir = privateDirectory(raw.stateDir, 'stateDir');
   const limits = { ...defaults };
   const bounds: Record<keyof typeof defaults, [number, number]> = {

@@ -94,6 +94,16 @@ added by Bridge and are absent from examples. Command names, prompt operands,
 Use `codex.cwd` for the fixed working directory. Do not put secrets in argv/config
 overrides: command arguments can appear in local process listings.
 
+To explicitly pre-approve Bridge's sender for the configured Slack destinations,
+set `codex.sendToolApprovalMode` to `"approve"` in the private JSON. This applies
+only to the invocation-local `techbase_bridge.send_message` tool; global approvals,
+sandbox permissions and other MCP tools retain their normal configuration. Omit
+this field to inherit Codex's usual MCP approval behavior. The other supported
+[per-tool modes](https://learn.chatgpt.com/docs/extend/mcp#other-configuration-options)
+are `"auto"`, `"prompt"` and `"writes"`. With a noninteractive `never` approval
+policy, a tool that still requires approval is blocked; Bridge does not provide an
+approval conversation. Choose the sender permission as part of operator setup.
+
 The MCP name `techbase_bridge` is reserved. Doctor rejects an existing entry of
 that name instead of overwriting it. Other existing MCP entries are preserved.
 Restart and run doctor after changing access, destinations, preset or Codex
