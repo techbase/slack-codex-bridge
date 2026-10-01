@@ -1,67 +1,73 @@
-# Architecture decisions
+# Architecture
 
-## Small local service
+```text
+Slack Socket Mode (official Bolt)
+  -> authorize ordinary message -> dedup / bounded SQLite queue
+  -> fixed Codex CLI child process (no shell, prompt on stdin, JSONL stdout)
+       -> MCP stdio send_message -> turn-scoped loopback capability
+            -> destination validation / durable delivery intent -> Slack Web API
+  -> final answer fallback only when no tool send was attempted
+```
 
-Slack Bolt Socket Mode owns event acknowledgement and transport. No incoming
-public webhook or hosted OAuth service is needed. Each operator creates their own
-app. Socket Mode apps cannot be listed in the Slack Marketplace; public source is
-the distribution model here. See [Slack's Socket Mode documentation](https://docs.slack.dev/apis/events-api/using-socket-mode/).
+`src/config.ts` validates private operator configuration. Slack text cannot choose
+process options or sender destinations. `src/slack.ts` subscribes to `message`
+events only; the manifest covers public and private channel messages with
+`channels:history`, `groups:history` and `chat:write`. No DM, app-mention or slash
+command subscription is needed. Mention-only mode filters those same messages.
+The app must be a channel member; startup verifies its team/bot identity.
 
-The official Codex TypeScript SDK owns CLI invocation, structured events, and
-persistent Codex thread IDs. Use its supported startThread/resumeThread API and
-bundled compatible CLI, rather than parsing terminal output or editing Codex
-session files. See [Codex SDK](https://learn.chatgpt.com/docs/codex-sdk).
+`src/bridge.ts` authorizes workspace, channel and user before storage, reply or
+execution. It excludes bot/self/subtype/edit/shared events and stale envelopes.
+A request gets a queue acknowledgement; an uncertain acknowledgement prevents
+execution. Controls are deterministic and cancellation is requester/operator scoped.
+The fixed cwd runs one CLI turn at a time, including across incoming channels.
 
-This headless Node/TypeScript service is not a generated Go/Vue web application.
-Native Runner setup is the supported delivery path. The current Operations
-new-project helper creates a private Genny app, so it is not used for this public
-tool. Operations registration, native Runner work, independent ownership checks,
-and human merge review remain the same. Neither Genny nor Operations needs a
-source change for this project.
+`src/codex.ts` spawns the configured executable directly. Operator arguments are
+validated global CLI options followed by an invocation-local MCP override and
+`exec --json -`, or `exec --json resume SESSION_ID -`. Only the saved explicit ID
+is resumed; never `--last`. Context and the Slack message go on stdin. No shell,
+permission override, auth migration, config file edit or session-file access is
+involved. HOME, CODEX_HOME when already set, PATH, provider authentication, proxies
+and normal environment survive; Slack-prefixed variables and exact aliases of
+their values are omitted. Stale Bridge capabilities are replaced per turn.
 
-## Boundaries
+The adapter consumes bounded JSONL, persists `thread.started` synchronously, and
+accepts the last `agent_message` only after a valid `turn.completed` and zero exit.
+Reasoning, commands, tool results and stderr are not forwarded. Provider errors
+and malformed/oversized streams produce fixed failure codes. A process group and
+TERM/KILL escalation implement cancellation; the queue awaits child close and
+sender settlement before reuse. This is process cleanup, not an OS security boundary.
 
-Configuration fixes workspace, allowed identities, channel/project mapping,
-real paths, and runtime home. Validate nonempty allowlists and fail closed.
-Never derive shell commands, executable paths, or cwd from a Slack message.
-The initial model turn is read-only, approval policy never, with external
-tools/MCP/apps/plugins and web search disabled through supported CLI settings.
-Isolate authentication and configuration from the operator's personal Codex home;
-never copy authentication automatically. Reject inherited settings that could
-expand tool access. Verify actual SDK child environment and arguments in tests.
+`src/mcp-stdio.ts` uses the official MCP SDK and a strict `send_message` schema:
+`text`, optional `destination`. `src/mcp.ts` registers it for this invocation using
+supported CLI `-c mcp_servers.techbase_bridge=...`. A temporary loopback listener
+uses a random turn capability passed through environment, never CLI arguments or
+Slack tokens. No endpoint is exposed outside loopback. Doctor reserves the MCP
+name and checks that existing entries survive the additive override byte-for-byte
+in the CLI listing. It never writes the operator's config. Changes to operator
+configuration while Bridge runs require restart and doctor. The listing probe
+omits `--strict-config`, which CLI 0.159.3 accepts for execution but rejects for
+`mcp list`; the actual execution preset is unchanged.
 
-Read-only sandboxing prevents filesystem mutation under Codex's supported policy;
-it does not mean only the selected repository can be read. Run the service as a
-dedicated unprivileged account with access only to suitable repositories. Authorized
-users and everyone able to read the selected Slack channel may see those projects'
-contents in model answers. Slack tokens must not be inherited by the child; secret
-redaction of output is additional mitigation, not a confidentiality guarantee.
-Slack and the configured model provider receive prompts/results according to
-their own policies. Codex model calls require provider connectivity even when
-the shell sandbox's network access is disabled.
+`src/send.ts` independently validates every tool call and each outbound chunk.
+`thread` means the authorized originating channel/root; an alias means a configured
+channel's top level. No workspace, raw channel or arbitrary thread argument exists.
+It bounds total tool text and number of sends, serializes sends, and writes delivery
+intent before Slack. Uncertainty disables further tool sends for the turn. The CLI
+gets delivery guidance, not instructions restricting what work it may perform.
+Any tool attempt suppresses final fallback, preventing duplicate answers after
+success, partial delivery, an uncertain send or a later CLI failure. `status`
+reports CLI outcome and Slack delivery separately.
 
-## Durable state and recovery
+`src/store.ts` retains schema version 1: dedup events, jobs and session IDs keyed
+by workspace/channel/root/cwd. Prompts are cleared at terminal state; answers are
+never stored. Startup marks queued/active jobs interrupted and pending/sending
+delivery uncertain. It never reruns work or sends on recovery. SQLite's local
+instance lock prevents two services using one state directory; it is not a
+cross-host coordinator. Retention and admission bounds stay in the existing store.
 
-Use a private SQLite database for event deduplication, session IDs, bounded queued
-requests, delivery state, and status. Prepared statements; schema version checked
-on startup; an instance lock prevents competing workers. Basic node:sqlite APIs
-on the documented Node minimum are sufficient, avoiding a native database binding.
-Store only necessary data. Document that Codex separately persists its conversations.
-
-Serialize work per project. Persist a thread ID as soon as observed. A crashed
-active request becomes interrupted, not queued again. Pending Slack delivery must
-not rerun Codex. Explain delivery retries/ambiguity honestly: Slack delivery cannot
-be guaranteed exactly once across network failure. Distinguish model completion
-from final-message delivery. Bound queue, input, output, turn time, retained rows,
-and diagnostic output. Abort and await active turns during shutdown before releasing
-the instance lock. Avoid bespoke background orchestration beyond this queue.
-
-## Verification
-
-Use injected Slack/model boundaries for deterministic integration tests. Separately
-execute the real SDK with a fake CLI to prove options, environment, continuation,
-stream/failure handling, and cancellation reach the process. Exercise unauthorized
-events, cross-thread isolation, retries, crashes, uncertain Slack delivery, malicious
-Slack formatting, long output, missing completion, and clean shutdown. Test the
-documented install/build/doctor path on an eligible runtime. Real Slack installation,
-real model use, and service deployment remain operator prerequisites.
+`src/doctor.ts` checks setup, built MCP entry point, configured CLI version/help and
+MCP listing without a model or Slack call. `src/main.ts` owns startup, identity
+verification, bounded safe diagnostics and awaited shutdown. There is no custom UI
+or browser journey. Node 24.16+ on macOS/Linux and CLI 0.159.3 are the release
+contract; Docker remains an optional, explicitly unverified example in this change.

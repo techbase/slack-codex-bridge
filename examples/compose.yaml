@@ -1,0 +1,28 @@
+# Optional and unverified. All operator inputs stay outside this repository.
+services:
+  bridge:
+    build:
+      context: ..
+    init: true
+    user: "1000:1000"
+    env_file:
+      - ${BRIDGE_TOKEN_FILE:?Set a private token environment file}
+    environment:
+      BRIDGE_CONFIG: /run/bridge/config.json
+      HOME: /home/node
+    volumes:
+      - type: bind
+        source: ${BRIDGE_CONFIG_FILE:?Set a private container config JSON file}
+        target: /run/bridge/config.json
+        read_only: true
+      - type: bind
+        source: ${BRIDGE_PROJECT_DIR:?Set the intended project directory}
+        target: /workspace/project
+        read_only: ${BRIDGE_PROJECT_READ_ONLY:-false}
+      - type: bind
+        source: ${BRIDGE_STATE_DIR:?Set a private mode-0700 state directory owned by UID 1000}
+        target: /var/lib/bridge
+      - type: bind
+        source: ${BRIDGE_CODEX_DIR:?Set persistent Codex configuration and session storage}
+        target: /home/node/.codex
+    stop_grace_period: 30s

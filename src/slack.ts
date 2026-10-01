@@ -23,7 +23,7 @@ export function appOptions(botToken: string, appToken: string, diagnostic: Diagn
 }
 
 export function wireSlack(app: App, bridge: Bridge, diagnostic: Diagnostic): void {
-  app.event('app_mention', async ({ body }) => { await bridge.accept(body); });
+  app.event('message', async ({ body }) => { await bridge.accept(body); });
   app.error(async () => { diagnostic('slack_event_failed'); });
 }
 

@@ -1,0 +1,13 @@
+{
+  "teamId": "TEXAMPLE",
+  "botUserId": "UBRIDGE",
+  "allowedUserIds": ["UALICE"],
+  "incomingChannelIds": ["CPROJECT"],
+  "outgoingChannels": { "updates": "CUPDATES" },
+  "codex": {
+    "executable": "/app/node_modules/.bin/codex",
+    "args": [],
+    "cwd": "/workspace/project"
+  },
+  "stateDir": "/var/lib/bridge"
+}

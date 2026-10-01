@@ -1,64 +1,72 @@
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
-import test from 'node:test';
-import { Codex } from '@openai/codex-sdk';
-import { boundaryOverrides, childEnvironment, CodexModel, DISABLED_FEATURES, ModelFailure, preflight, runLocalCli, sdkOptions } from '../src/codex.js';
-import { deferred, fixture } from './helpers.js';
+import test, { type TestContext } from 'node:test';
+import { childEnvironment, CodexModel, ModelFailure, listMcp, preflight, runLocalCli, CODEX_VERSION } from '../src/codex.js';
+import { MCP_NAME } from '../src/mcp.js';
+import { Bridge } from '../src/bridge.js';
+import { Store } from '../src/store.js';
+import { deferred, fixture, ManualClock, message, NOW, RecordingSlack } from './helpers.js';
 
-test('official SDK invokes fake executable with enforced args, minimal environment, stdin and persisted continuation', async t => {
-  const { config, root } = fixture(t);
-  const executable = path.join(root, 'fake-codex');
-  writeFileSync(executable, `#!${process.execPath}\n` + readFileSync(new URL('../../test/fixtures/fake-codex.cjs', import.meta.url), 'utf8'), { mode: 0o700 });
-  const previous = process.env.SLACK_BOT_TOKEN;
-  process.env.SLACK_BOT_TOKEN = 'xoxb-fixture-service-secret';
-  t.after(() => { if (previous === undefined) delete process.env.SLACK_BOT_TOKEN; else process.env.SLACK_BOT_TOKEN = previous; });
-  const sdk = new Codex({ ...sdkOptions(config), codexPathOverride: executable });
-  const model = new CodexModel(config, sdk, async () => {});
+const require = createRequire(import.meta.url);
+function fake(t: TestContext) {
+  const { config, root, env } = fixture(t);
+  config.codex.executable = path.join(root, 'fake-codex');
+  writeFileSync(config.codex.executable, `#!${process.execPath}\n` + readFileSync(new URL('../../test/fixtures/fake-codex.cjs', import.meta.url), 'utf8'), { mode: 0o700 });
+  env.FIXTURE_MCP_CLIENT = require.resolve('@modelcontextprotocol/sdk/client/index.js');
+  env.FIXTURE_MCP_STDIO = require.resolve('@modelcontextprotocol/sdk/client/stdio.js');
+  const model = new CodexModel(config, env);
+  return { config, root, env, model };
+}
+const noSend = async () => ({ ok: false, message: 'No sends in this fixture.' });
+
+test('direct configured executable keeps static argv/cwd and stdin prompts, normal auth/config environment, explicit continuation and no Slack tokens', async t => {
+  const { config, root, env, model } = fake(t);
+  config.codex.args = ['--profile', 'fixture-profile', '-c', 'model_reasoning_effort="low"', '--strict-config'];
+  Object.assign(env, { SLACK_BOT_TOKEN: 'xoxb-fixture', SLACK_APP_TOKEN: 'xapp-fixture', SLACK_SIGNING_SECRET: 'fixture-signing',
+    ALIASED_SLACK_TOKEN: 'xoxb-fixture', OPENAI_API_KEY: 'fixture-provider-auth', HTTPS_PROXY: 'http://fixture.invalid', BRIDGE_SEND_TOKEN: 'stale-capability' });
+  writeFileSync(path.join(env.CODEX_HOME!, 'config.toml'), 'model="fixture-existing-model"\n');
   const observed: string[] = [];
-  const request = { project: config.channels.CPROJECT!, prompt: 'success', signal: new AbortController().signal, onThread: (id: string) => observed.push(id) };
+  const commandText = '--dangerously-bypass-approvals-and-sandbox; $(touch unexpected) cwd=/etc destination=CUNKNOWN';
+  const request = { project: config.codex.cwd, prompt: commandText, signal: new AbortController().signal,
+    onThread: (id: string) => observed.push(id), sendMessage: noSend };
   assert.equal(await model.run(request), 'Only the final answer.');
-  assert.deepEqual(observed, ['fixture-thread-0001']);
   assert.equal(await model.run({ ...request, prompt: 'follow-up', threadId: observed[0] }), 'Only the final answer.');
-  const captures = readFileSync(path.join(config.codexHome, 'invocations.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  assert.deepEqual(observed, ['fixture-thread-0001', 'fixture-thread-0001']);
+  const captures = readFileSync(path.join(root, 'invocations.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
   assert.equal(captures.length, 2);
   for (const capture of captures) {
-    assert.equal(capture.env.SLACK_BOT_TOKEN, undefined);
-    const { __CF_USER_TEXT_ENCODING: macEncoding, ...environment } = capture.env;
-    if (macEncoding !== undefined) {
-      assert.equal(process.platform, 'darwin');
-      assert.match(macEncoding, /^(?:0x[0-9A-Fa-f]+|\d+)(?::(?:0x[0-9A-Fa-f]+|\d+)){2}$/);
-    }
-    assert.deepEqual(environment, { ...childEnvironment(config), CODEX_INTERNAL_ORIGINATOR_OVERRIDE: 'codex_sdk_ts' });
-    assert.ok(capture.args.includes('read-only'));
-    assert.equal(capture.args[capture.args.indexOf('--cd') + 1], config.channels.CPROJECT);
-    assert.ok(capture.args.includes('approval_policy="never"'));
-    assert.ok(capture.args.includes('web_search="disabled"'));
-    assert.ok(capture.args.includes('sandbox_workspace_write.network_access=false'));
-    assert.ok(capture.args.includes('features.apps=false'));
-    assert.ok(capture.args.includes('features.plugins=false'));
-    assert.ok(capture.args.includes('features.hooks=false'));
-    assert.ok(capture.args.includes('orchestrator.mcp.enabled=false'));
-    const guidance = capture.args.find((arg: string) => arg.startsWith('developer_instructions='));
-    assert.match(guidance, /state uncertainty or missing evidence/);
-    assert.match(guidance, /concise final answer/);
-    assert.ok(!capture.args.includes('--skip-git-repo-check'));
-    assert.ok(!capture.args.includes('--add-dir'));
-    for (const override of boundaryOverrides()) assert.ok(capture.args.includes(override));
+    for (const key of ['SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN', 'SLACK_SIGNING_SECRET', 'ALIASED_SLACK_TOKEN']) assert.equal(capture.env[key], undefined);
+    for (const key of ['HOME', 'CODEX_HOME', 'PATH', 'OPENAI_API_KEY', 'HTTPS_PROXY']) assert.equal(capture.env[key], env[key]);
+    assert.notEqual(capture.env.BRIDGE_SEND_TOKEN, 'stale-capability');
+    assert.equal(capture.cwd, config.codex.cwd);
+    assert.deepEqual(capture.args.slice(0, config.codex.args.length), config.codex.args);
+    assert.ok(capture.args.includes('exec'));
+    assert.ok(capture.args.includes('--json'));
+    assert.equal(capture.args.at(-1), '-');
+    assert.ok(!capture.args.some((arg: string) => /read-only|approval_policy|features\.|developer_instructions|--last|xoxb|xapp/.test(arg)));
+    assert.ok(!capture.args.includes(commandText));
+    assert.ok(!capture.args.includes(capture.env.BRIDGE_SEND_TOKEN));
   }
-  assert.equal(captures[0].input, 'success');
+  assert.ok(captures[0].input.endsWith(commandText));
+  assert.match(captures[0].input, /configured channel aliases: updates/);
   assert.equal(captures[0].args.includes('resume'), false);
   assert.equal(captures[1].args[captures[1].args.indexOf('resume') + 1], 'fixture-thread-0001');
-  assert.equal(captures[1].input, 'follow-up');
+  assert.ok(captures[1].input.endsWith('follow-up'));
+  assert.equal(readFileSync(path.join(env.CODEX_HOME!, 'config.toml'), 'utf8'), 'model="fixture-existing-model"\n');
+  delete env.CODEX_HOME;
+  assert.equal(await model.run({ ...request, prompt: 'normal home' }), 'Only the final answer.');
+  const normal = JSON.parse(readFileSync(path.join(root, 'invocations.jsonl'), 'utf8').trim().split('\n').at(-1)!);
+  assert.equal(normal.env.HOME, root);
+  assert.equal(normal.env.CODEX_HOME, undefined);
+  assert.equal(childEnvironment({ HOME: root, OPENAI_API_KEY: 'fixture' }).CODEX_HOME, undefined);
 });
 
-test('official SDK stream failures, absent/malformed completion and oversized final data fail without provider leakage', async t => {
-  const { config, root } = fixture(t);
-  const executable = path.join(root, 'fake-codex');
-  writeFileSync(executable, `#!${process.execPath}\n` + readFileSync(new URL('../../test/fixtures/fake-codex.cjs', import.meta.url), 'utf8'), { mode: 0o700 });
-  const model = new CodexModel(config, new Codex({ ...sdkOptions(config), codexPathOverride: executable }), async () => {});
-  for (const prompt of ['failed', 'empty', 'missing-completion', 'malformed-completion', 'invalid-json', 'exit-failure', 'oversize']) {
-    await assert.rejects(model.run({ project: config.channels.CPROJECT!, prompt, signal: new AbortController().signal, onThread() {} }), error => {
+test('provider/malformed output, incomplete turns and oversized data fail without payload leakage', async t => {
+  const { config, model } = fake(t);
+  for (const prompt of ['failed', 'missing-completion', 'malformed-completion', 'invalid-json', 'null-event', 'exit-failure', 'oversize']) {
+    await assert.rejects(model.run({ project: config.codex.cwd, prompt, signal: new AbortController().signal, onThread() {}, sendMessage: noSend }), error => {
       assert.ok(error instanceof ModelFailure);
       assert.doesNotMatch(error.message, /PRIVATE/);
       return true;
@@ -66,32 +74,53 @@ test('official SDK stream failures, absent/malformed completion and oversized fi
   }
 });
 
-test('official SDK AbortSignal stops fake process work after an early persisted thread ID', async t => {
-  const { config, root } = fixture(t);
-  const executable = path.join(root, 'fake-codex');
-  writeFileSync(executable, `#!${process.execPath}\n` + readFileSync(new URL('../../test/fixtures/fake-codex.cjs', import.meta.url), 'utf8'), { mode: 0o700 });
-  const model = new CodexModel(config, new Codex({ ...sdkOptions(config), codexPathOverride: executable }), async () => {});
-  const started = deferred<string>();
-  const controller = new AbortController();
-  const running = model.run({ project: config.channels.CPROJECT!, prompt: 'cancel', signal: controller.signal, onThread: started.resolve });
-  const rejected = assert.rejects(running, ModelFailure);
-  assert.equal(await started.promise, 'fixture-thread-0001');
-  controller.abort(); await rejected;
-  // PID disappearance is not the SDK's synchronization contract. This child
-  // marker proves its signal handler stopped the simulated work, without an
-  // arbitrary sleep or an assumption about when Node reaps the PID.
-  assert.equal(readFileSync(path.join(config.codexHome, 'stopped'), 'utf8'), 'No model work remains.');
+test('cancellation awaits actual executable termination, escalating a child that ignores SIGTERM', async t => {
+  const { config, root, model } = fake(t);
+  for (const prompt of ['cancel', 'ignore-term']) {
+    const started = deferred<string>();
+    const controller = new AbortController();
+    const running = model.run({ project: config.codex.cwd, prompt, signal: controller.signal, onThread: started.resolve, sendMessage: noSend });
+    const rejected = assert.rejects(running, ModelFailure);
+    assert.equal(await started.promise, 'fixture-thread-0001');
+    controller.abort(); await rejected;
+    const captures = readFileSync(path.join(root, 'invocations.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    assert.throws(() => process.kill(captures.at(-1).pid, 0), { code: 'ESRCH' });
+  }
+  assert.equal(readFileSync(path.join(root, 'stopped'), 'utf8'), 'No model work remains.');
 });
 
-test('pinned real CLI verifies supported disabled features and no enabled MCPs without auth or a model call', async t => {
-  const { config } = fixture(t);
-  await preflight(config, config.channels.CPROJECT!);
-  const features = await runLocalCli(config, config.channels.CPROJECT!, ['features', 'list']);
-  for (const name of DISABLED_FEATURES) assert.match(features, new RegExp(`^${name}\\s+.+\\sfalse$`, 'm'));
-  assert.deepEqual(JSON.parse(await runLocalCli(config, config.channels.CPROJECT!, ['mcp', 'list', '--json'])), []);
-  writeFileSync(path.join(config.codexHome, 'config.toml'), '[mcp_servers.fixture]\ncommand="/fixture/never-execute"\n');
-  await assert.rejects(preflight(config, config.channels.CPROJECT!), /Custom or managed/);
-  const merged = JSON.parse(await runLocalCli(config, config.channels.CPROJECT!, ['-c', 'mcp_servers={}', 'mcp', 'list', '--json']));
-  assert.equal(merged[0]?.name, 'fixture');
-  assert.equal(merged[0]?.enabled, true, 'An empty override is not an MCP disable switch.');
+test('pinned real CLI no-model listing merges Bridge with fixture existing MCP and preserves config bytes', async t => {
+  const { config, env } = fixture(t);
+  // Exercise the normal HOME/.codex path, without a CODEX_HOME override.
+  delete env.CODEX_HOME;
+  mkdirSync(path.join(env.HOME!, '.codex'), { mode: 0o700 });
+  const file = path.join(env.HOME!, '.codex', 'config.toml');
+  const content = '[mcp_servers.fixture]\ncommand="fixture-never-execute"\nargs=["fixture-arg"]\n\n[mcp_servers.fixture.env]\nFIXTURE_SETTING="keep-me"\n';
+  writeFileSync(file, content);
+  config.codex.args = ['--strict-config'];
+  await preflight(config, env);
+  assert.equal(await runLocalCli(config, ['--version'], env), `codex-cli ${CODEX_VERSION}`);
+  const merged = await listMcp(config, true, env);
+  assert.ok(Array.isArray(merged));
+  assert.equal(merged.length, 2);
+  assert.equal(merged.find((s: { name: string }) => s.name === MCP_NAME)?.enabled, true);
+  assert.equal(merged.find((s: { name: string }) => s.name === 'fixture')?.enabled, true);
+  assert.equal(readFileSync(file, 'utf8'), content);
+  writeFileSync(file, content + `\n[mcp_servers.${MCP_NAME}]\ncommand="existing-operator-tool"\n`);
+  await assert.rejects(preflight(config, env), /reserved/);
+});
+
+test('actual fake CLI invokes registered MCP stdio sender and Bridge suppresses its duplicate final answer', async t => {
+  const { config, root, model } = fake(t);
+  const store = new Store(config, NOW);
+  const slack = new RecordingSlack();
+  const bridge = new Bridge(config, store, model, slack, [], () => {}, new ManualClock());
+  t.after(async () => { await bridge.shutdown(); store.close(); });
+  await bridge.accept(message('tool-e2e', 'tool'));
+  await bridge.idle();
+  assert.equal(slack.posts.length, 2);
+  assert.equal(slack.posts[1]?.text, 'Answer sent through the real MCP round trip.');
+  assert.doesNotMatch(JSON.stringify(slack.posts), /Only the final answer/);
+  assert.equal(JSON.parse(readFileSync(path.join(root, 'tool-result.json'), 'utf8')).isError, false);
+  assert.equal(store.latest({ team: config.teamId, channel: 'CPROJECT', root: '1800000000.000001', project: config.codex.cwd })?.state, 'completed');
 });

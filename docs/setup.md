@@ -1,216 +1,197 @@
 # Setup and operation
 
-Bridge is a headless service for a single operator-configured Slack workspace.
-All IDs and paths below are fictional. Do not put operator configuration, tokens,
-database files, Codex sessions, or personal notes in this public repository.
+## Native workstation or server
 
-## 1. Prepare the account and runtime
-
-Use a dedicated **unprivileged** macOS or Linux account. Give it read access only
-to projects and other files suitable for the channel's audience. Use a local
-filesystem for state; network filesystems and multiple hosts sharing the database
-are unsupported. Install Node 24.16.0 or newer, then run `npm ci` and
-`npm run build` in the checkout. Do not omit optional dependencies: the official
-SDK needs its matching platform CLI. No global Codex installation is used.
-
-The code uses basic `DatabaseSync`/prepared statements from `node:sqlite` and
-`node:test`, available without a SQLite flag on this minimum. SQLite can still
-produce an experimental warning on Node 24. The locked runtime dependency
-engines are compatible with the minimum. CI exercises `.node-version`.
-
-Create separate private directories outside every mapped project, owned by the
-service account. Use canonical paths (on macOS `/var` often resolves to
-`/private/var`) without symlink components. For example, after the administrator
-has provisioned `/srv/bridge` for that account:
+Use Node 24.16.0+ on macOS or Linux and an existing working Codex CLI 0.159.3
+setup. The locked dependency provides that CLI under `node_modules/.bin/codex`;
+you can select its absolute path or your matching existing executable. No separate
+OS account, new CODEX_HOME or fresh login is required. Your existing Codex config,
+profiles, MCP servers, apps and permissions remain relevant. Verify that the
+chosen preset can operate noninteractively; Bridge does not implement an approval
+conversation or add permission flags. A request that cannot proceed can fail or
+reach its timeout. Choose isolation and permissions to suit your deployment.
 
 ```sh
-umask 077
-mkdir -m 700 /srv/bridge/state /srv/bridge/codex
-cp examples/bridge.config.json /srv/bridge/bridge.config.json
-cp .env.example /srv/bridge/bridge.env
-chmod 600 /srv/bridge/bridge.config.json /srv/bridge/bridge.env
+npm ci
+npm run build
+mkdir -p /your/private/bridge/state
+chmod 700 /your/private/bridge/state
+cp examples/bridge.config.json /your/private/bridge/bridge.config.json
+chmod 600 /your/private/bridge/bridge.config.json
 ```
 
-Edit the private JSON with your workspace ID, bot user ID, allowed human IDs,
-channel IDs, and absolute Git project roots. Operators must also be in
-`allowedUserIds`. A root with a `.git` worktree file is supported. Channel aliases
-resolve to one real path for serialization, but keep separate conversations.
-Slack text cannot choose a directory, model executable, policy, or arbitrary
-configuration override. Unrecognized config keys are rejected.
+Replace the fictional paths/IDs in the copied JSON. `stateDir` must be canonical,
+owned by the service user, mode 0700, without symlink components. Keep it and the
+config outside public Git. On macOS, use a canonical path rather than a `/var` or
+`/tmp` symlink. `codex.cwd` must be an existing absolute directory. Codex's own
+Git/trust/configuration requirements still apply there. Configuration JSON has no
+secrets; put Slack tokens in a private environment file (mode 0600) or your normal
+service secret mechanism. Bridge does not automatically read `.env` files.
 
-Read [the boundary prerequisites](security.md), then set `hostPolicyReviewed`
-to `true`. The service refuses to start before this explicit operator attestation.
-The example deliberately defaults to `false`.
-
-## 2. Create your Slack app
-
-Create a Slack app **from [slack-manifest.json](../slack-manifest.json)** in your
-chosen workspace. Review the two bot scopes: `app_mentions:read` and `chat:write`.
-Event subscriptions contain only `app_mention`; Socket Mode is enabled. No history
-scope, slash command, OAuth callback server, or public request URL is needed.
-
-In the app's Basic Information page, create an **app-level token** with only
-`connections:write`. App-level tokens are a separate Slack setup step, not a bot
-scope in the manifest. Install your app into your workspace, obtain its bot token,
-and invite the bot to each mapped channel. Use ordinary dedicated channels;
-externally shared Slack Connect events are rejected in this release.
-
-Set `SLACK_APP_TOKEN` (the `xapp-` token) and `SLACK_BOT_TOKEN` (the `xoxb-` token)
-in `/srv/bridge/bridge.env`. Set `BRIDGE_CONFIG` to your private JSON path. Obtain
-and enter the bot's user ID and workspace ID; startup verifies them with
-`auth.test` before connecting Socket Mode. Allowed human IDs are explicit, never
-inferred from display names. Anyone who can read the channel can read its answers,
-even if that person cannot ask the bot questions.
-
-Do not install a real app or send test messages as part of repository fixture
-verification. Those are separate operator actions for the eventual pilot.
-
-## 3. Authenticate the dedicated Codex runtime
-
-Do not copy a personal `auth.json`. Log in separately as the dedicated account
-using the locked CLI and **only** the dedicated home. For example, from the
-checkout, with a Node installation in `/usr/local/bin` (adjust this fixed path to
-your account's installation):
+Set `BRIDGE_CONFIG` to the private JSON path and `SLACK_BOT_TOKEN` / `SLACK_APP_TOKEN`
+in the process environment using your normal shell or service manager. Preserve
+the HOME, PATH, CODEX_HOME if used, and provider/auth environment of your working
+Codex installation. Then run `npm run doctor` and `npm start` from the checkout.
+A native service manager may invoke `node /absolute/bridge/dist/src/main.js`
+directly with the same environment; no bundled scheduler or installer is required.
+You can also load your private environment file explicitly with Node:
 
 ```sh
-env -i HOME=/srv/bridge/codex CODEX_HOME=/srv/bridge/codex \
-  PATH=/usr/local/bin:/usr/bin:/bin \
-  node node_modules/@openai/codex/bin/codex.js \
-  -c 'cli_auth_credentials_store="file"' login --device-auth
+node --env-file=/your/private/bridge/bridge.env dist/src/main.js doctor
+node --env-file=/your/private/bridge/bridge.env dist/src/main.js
 ```
 
-This is an operator login, not a model turn. Protect the resulting `auth.json`
-with mode 0600. Keychain fallback, inherited API keys, custom provider URLs, and
-personal configuration are intentionally unsupported. Keep `config.toml` absent
-from the dedicated runtime and the project configuration locations described in
-the security guide. Do not set `CODEX_HOME` in the **Bridge service** environment;
-its JSON selects the dedicated home and Bridge supplies it only to CLI children.
+Stop with SIGINT/SIGTERM and allow admitted sends/process cleanup to settle.
 
-Doctor checks that the dedicated auth file exists and is private; it does not
-read its contents, validate expiry, contact the provider, or attest account access.
-Only a later authorized live pilot can prove those details.
+Doctor checks config/path validity, token presence (without printing values), the
+built sender, CLI version/help, and a no-model MCP listing with the invocation-local
+sender. It does not inspect/copy auth files, call Slack, run a model, verify login
+expiry, attest OS sandbox enforcement or reject normal Codex configuration.
+Startup additionally checks the Slack token's team/bot identity and acquires the
+single-instance SQLite lock. A configured executable is trusted operator code;
+Bridge cannot make a malicious executable's `--help` or `--version` safe.
 
-## 4. Doctor and start
+## Slack app
 
-With the private environment already loaded by your process manager, use:
+Create an app from [slack-manifest.json](../slack-manifest.json), enable Socket
+Mode, and create an app-level token with `connections:write`. Install it in the
+single intended workspace. Bot scopes are `channels:history`, `groups:history`
+and `chat:write`; bot events are `message.channels` and `message.groups`.
+If you only use one channel type, you can remove its unused counterpart event and
+history scope from your app. There are no DM, `app_mention` or slash-command
+subscriptions. Do not add `chat:write.public`: invite the bot to every incoming
+and outgoing channel instead. Set team, bot-user and permitted human-user IDs
+explicitly. Bridge does not discover channels or expand access from Slack text.
 
-```sh
-npm run doctor
-npm start
-```
+**Migrating an old app:** update subscriptions/scopes from the former
+`app_mention`/`app_mentions:read` manifest, reinstall/re-authorize the app to grant
+history scopes, and invite it to the configured channels. Changing repository
+JSON alone does not update a Slack installation. Ordinary authorized human
+messages now trigger by default; set `mentionOnly: true` if that is your chosen
+channel behavior. Both modes use the same `message` subscription, preventing
+double event delivery from parallel mention/message listeners.
 
-Alternatively Node can read the private env file without sourcing shell code:
+## Configuration
 
-```sh
-node --env-file=/srv/bridge/bridge.env dist/src/main.js doctor
-node --env-file=/srv/bridge/bridge.env dist/src/main.js
-```
+[examples/bridge.config.json](../examples/bridge.config.json) is fictional. The
+operator fixes incoming IDs and outgoing alias-to-ID mappings. `thread` is a
+reserved implicit destination for replies in the originating Slack thread. An
+explicit alias posts at the top level of that configured outgoing channel, even
+if it maps to the incoming channel. An empty outgoing map allows only thread replies.
+Everyone with channel visibility may read output, including people not allowed
+to invoke Bridge. Do not configure aliases with inappropriate audiences.
 
-Doctor validates runtime, configuration, access lists, directories, credential
-presence, bundled CLI version, disabled features and MCP configuration. It runs
-local `--version`, `features list`, and `mcp list --json`, never `exec`. Missing
-setup produces exit status 1 and safe messages. Startup repeats those checks;
-each model turn rechecks the execution boundary. Existing service state is not
-opened or recovered by doctor. Startup checks the schema and acquires the lock.
+`codex.args` contains **global CLI options**, before Bridge's `exec` subcommand.
+Use separate argument/value entries, for example `["--profile", "slack"]` or
+`["--sandbox", "workspace-write", "--ask-for-approval", "never"]` only if those are
+your intended permissions. Supported value options are `--config`/`-c`,
+`--profile`/`-p`, `--model`/`-m`, `--sandbox`/`-s`, `--ask-for-approval`/`-a`,
+`--enable`, `--disable`, `--local-provider` and `--add-dir`. Supported flags are
+`--oss`, `--search`, `--approve-for-me`, `--no-daemon`, `--strict-config` and the
+CLI's two explicit `--dangerously-bypass-*` flags. Those dangerous flags are never
+added by Bridge and are absent from examples. Command names, prompt operands,
+`--last`, `--cd`, output-file and ephemeral-session options are not accepted.
+Use `codex.cwd` for the fixed working directory. Do not put secrets in argv/config
+overrides: command arguments can appear in local process listings.
 
-Run the foreground process under your account's usual service manager. Deliver
-SIGTERM or SIGINT for a clean shutdown and allow active Codex cancellation and
-Slack sends to finish before force-killing it. Slack sends have a 10-second
-request timeout. Do not remove or replace database/lock files while it runs.
-There is no incoming HTTP listener. No logs should contain prompts, model output,
-provider errors, tokens, or environment dumps; diagnostics contain fixed reason
-codes and generated job IDs, with at most 20 diagnostic lines per minute.
-
-## Queue, recovery, and limits
-
-An accepted question gets one acknowledgement and one final outcome (long answers
-may occupy multiple messages), all in its originating thread. Only final model
-text is sent. Reasoning, commands, tool results and SDK logs are discarded.
-`help`, `status`, and `cancel` are deterministic explicit mentions. Cancellation
-affects only the caller's pending requests in that thread, or all pending requests
-there when a configured operator asks. It cannot retract an already-completed
-answer or a request already accepted by the model provider.
+The MCP name `techbase_bridge` is reserved. Doctor rejects an existing entry of
+that name instead of overwriting it. Other existing MCP entries are preserved.
+Restart and run doctor after changing access, destinations, preset or Codex
+configuration. Session keys include cwd; changing the preset at the same cwd
+continues existing threads. Use a new Slack thread for fresh context. No process
+edits Codex session files or chooses the global last session.
 
 | Setting | Default | Meaning |
 | --- | ---: | --- |
-| `maxPending` | 20 | Total queued plus active requests |
-| `maxConcurrentProjects` | 2 | Global active project limit; one turn per real project |
-| `maxInputChars` | 12,000 | Prompt limit, counted as JavaScript UTF-16 units |
-| `maxOutputChars` | 24,000 | Redacted response budget before Slack escaping |
-| `turnTimeoutMs` | 300,000 | Boundary check plus model turn deadline |
-| `queueTtlMs` | 900,000 | Maximum wait before a queued request expires |
-| `retentionMs` | 604,800,000 | Seven-day metadata and dedup retention |
-| `maxRetainedEvents` | 10,000 | Admission stops at this retained event count |
+| `maxPending` | 20 | Queued plus active requests; one CLI turn at a time |
+| `maxInputChars` | 12,000 | Incoming prompt limit in UTF-16 units |
+| `maxOutputChars` | 24,000 | Final fallback budget; total tool text budget per turn |
+| `turnTimeoutMs` | 300,000 | CLI turn deadline; cleanup waits for process/send settlement |
+| `queueTtlMs` | 900,000 | Maximum wait before queued work expires |
+| `retentionMs` | 604,800,000 | Metadata/session/dedup retention (maximum 30 days) |
+| `maxRetainedEvents` | 10,000 | Admission stops at dedup capacity |
 
-Slack chunks are at most 3,000 UTF-16 units after escaping. Truncation is marked.
-`&`, `<`, and `>` are escaped; parsing, markdown, mentions, and unfurls are disabled.
-Slack tokens and nonempty values named by `secretEnvNames` are redacted before
-truncation/splitting. List additional service secret **environment variable names**
-in JSON, never their values. This is exact-value redaction, not a general secret
-detector or a guarantee against transformed/unknown secrets.
+Tool sends also have a ten-call limit and a 30-second per-send deadline, checked
+between chunks (an in-flight Slack call has a 10-second timeout). Output is redacted, escaped, and split into
+at most 3,000-unit Slack chunks. Raw CLI output is limited to 16 MB per turn and
+about 1 MB per JSONL event; excess fails safely. `secretEnvNames` lists additional
+environment variable names for exact-value output redaction; their values stay
+in the runtime environment because they may be provider credentials. All
+Slack-prefixed variables and exact-value aliases are omitted from the CLI env.
 
-The service records Slack event IDs before admission; duplicates never launch
-another turn. A crash between event admission and acknowledgement can lose that
-request, so use `status` and explicitly ask again. Incoming event timestamps older
-than the retention window (or over five minutes in the future) are ignored;
-keep the host clock synchronized. At dedup capacity, new events are ignored with
-a safe local diagnostic rather than evicting retry protection.
+## Recovery and retention
 
-An uncertain acknowledgement prevents execution. Model completion is stored
-**before** final delivery. Slack retries are disabled for outgoing Web API calls:
-a failed or timed-out send may already have arrived. Status reports model state
-and uncertain outcome delivery separately. There is no automatic resend or model
-retry, including after partial delivery of a long answer. Ask a follow-up explicitly
-if you need another answer; that is a new model turn and may incur cost.
+An accepted request gets one queue acknowledgement. If its delivery is uncertain,
+Bridge does not execute the request. Event IDs are claimed before admission;
+a crash between claim and acknowledgement can lose work rather than replay it.
+Events older than retention or over five minutes in the future are ignored.
+Keep host clocks synchronized. At dedup capacity, new events are ignored with a
+safe local reason code rather than evicting retry protection.
 
-On restart, all formerly active **and queued** work becomes `interrupted`, with
-prompts removed. Pending/sending delivery becomes `uncertain`. Recovery itself
-sends no unsolicited messages; an authorized `status` mention reports the result.
-Follow-up mentions resume the last thread ID observed before interruption.
-Requests never share a session across workspace/channel/root thread/real project.
-Restart after access or project-mapping changes; past state does not grant access.
+`help`, `status`, `cancel` (case insensitive, optional bot mention) are controls,
+not model prompts. Cancellation affects the caller's requests in the current
+thread; configured operators may cancel any request there. Cancellation cannot
+undo completed filesystem/external actions or already accepted Slack/provider work.
 
-## Retention and backups
+CLI completion is saved before automatic final delivery. Tool sends persist
+intent before Slack calls. Slack Web API retries are disabled, including for rate
+limits. A timeout/error can mean Slack accepted the message: delivery becomes
+`uncertain`, later tool sends stop, and no automatic final fallback or resend
+occurs. Partial long-answer delivery has the same rule. After a tool send, use
+`status` to see the CLI outcome if it later failed or was cancelled. Asking again
+explicitly is new work and may repeat actions or incur model cost.
 
-SQLite stores event IDs, necessary routing/request metadata, queued prompts,
-session IDs and delivery state, never final answers. Prompt text is cleared when
-work becomes terminal. Idle cleanup runs at least once per minute while the
-service is running; terminal rows and inactive sessions expire after
-`retentionMs` (maximum 30 days). Queue expiry is checked during scheduling and
-maintenance. Cleanup runs on startup too; nothing is deleted while the service is
-stopped. Persistent active sessions refresh their expiry when used.
+On restart, formerly queued and active jobs become `interrupted`; pending/sending
+deliveries become `uncertain`. Recovery sends nothing and never executes old work.
+Follow-ups use the last observed explicit session ID, which may contain a partial
+turn. The existing version-1 SQLite schema is retained. To migrate from the pilot,
+stop it, replace old JSON with the new format, and reuse its private state directory
+if you want retained dedup and matching cwd/thread sessions. Its isolated Codex
+sessions are not copied: continuation requires the selected runtime to have the
+saved session. Start a new Slack thread if it does not. Old `codexHome`,
+`hostPolicyReviewed`, `channels` and `maxConcurrentProjects` settings are rejected
+with a migration message; no silent legacy fallback remains.
 
-SQLite secure deletion is enabled and clean shutdown checkpoints/truncates its
-WAL. Retention is logical deletion, **not secure erasure** of old filesystem
-blocks, snapshots or backups. The database is bounded by admission count and
-configured limits, but the filesystem must still have sufficient free space.
+Terminal prompts are removed immediately; idle cleanup runs at least every minute.
+Bridge stores metadata/session IDs, never final answers. SQLite secure deletion
+and WAL checkpointing do not erase filesystem snapshots/backups. Codex, Slack and
+the model provider retain their own data independently; Bridge does not delete it.
+Back up private state using your normal secure procedure while Bridge is stopped.
+Restore to one instance with the matching configuration; old backups can lose
+recent dedup records, so account for Slack retry history before reconnecting.
 
-Codex separately persists conversations and runtime data under `codexHome`;
-Bridge's retention does **not** delete those files. Slack and the provider also
-have independent retention policies. The operator must set a separate lifecycle
-for the dedicated Codex home, Slack and backups. Do not delete active Codex
-sessions. To reset all conversations, stop Bridge and archive or remove its state
-and dedicated Codex home together under your approved data-retention procedure,
-then reauthenticate. This is an operator action, never automatic cleanup.
+## Optional Docker example — unverified
 
-For a consistent backup, stop Bridge cleanly, confirm it has exited, and back up
-the **entire** private state and Codex directories together using your secure
-backup tool. Protect backups as credentials and project content. Restore them
-only to the same trusted account/configuration with no running instance. Restoring
-an older snapshot can lose recent dedup information; wait out the retention window
-or account for Slack retry history before reconnecting. Never run two restored
-copies concurrently. The SQLite lock prevents a second process on the same local
-state directory; it is not a distributed lease.
+[Dockerfile](../Dockerfile) and [examples/compose.yaml](../examples/compose.yaml)
+provide a non-root Linux container path. They have not been built/run in this
+assignment: the available Docker client reports no daemon at its configured socket. Compose configuration validation passed using the
+installed Compose plugin directly. Native macOS fixture results do not establish
+container or Linux sandbox behavior.
 
-## Development and review
+Set the path variables shown in [examples/docker.env.example](../examples/docker.env.example)
+in a private Compose environment file. Create state and Codex storage directories
+owned by the image's `node` user (UID 1000), with private permissions, using your
+ordinary host administration process. Adapt UID ownership to your deployment;
+Bridge does not provision accounts or change host permissions for you. Use the
+[container configuration template](../examples/bridge.docker.config.json).
+The project is an explicit bind mount; choose read-only or writable according to
+your intended CLI policy. Codex's normal `/home/node/.codex` is explicitly mounted
+for persistent configuration/auth/session state. Authenticate/configure that runtime
+through Codex's supported operator flow, or use your established provider auth
+mechanism. Do not bake credentials into an image or copy someone else's login.
 
-Run the README gates sequentially. Tests use synthetic Slack envelopes, real Bolt
-with an injected fetch boundary, real `node:sqlite`, controlled time and a fake
-Codex executable launched through the real SDK. CLI configuration checks require
-no login. Do not run real model turns or Slack messages for this suite. No custom
-visual UI exists, so a browser screenshot is not required.
+```sh
+docker compose --env-file /private/bridge/docker.env -f examples/compose.yaml build
+docker compose --env-file /private/bridge/docker.env -f examples/compose.yaml run --rm bridge doctor
+docker compose --env-file /private/bridge/docker.env -f examples/compose.yaml up bridge
+```
 
-Runner owns the candidate commit, review and PR publication. Keep human merge
-review enabled; do not auto-merge or deploy. The coordinator independently runs
-Operations `check-pr` for the exact reviewed head. No Runner dispatch loop or
-Operations integration is part of this service.
+No published ports, Docker socket mount, privileged mode, host networking or
+sandbox-bypass flags are included. An init process reaps children. Nested Codex
+sandboxing depends on host/kernel/container support and may fail; doctor does not
+exercise it. Do not disable the sandbox just to pass a smoke check. Select a
+compatible deployment or explicitly evaluate the operator's desired policy outside
+this implementation assignment. See the official
+[agent permissions guidance](https://learn.chatgpt.com/docs/agent-approvals-security).
+The supplied upstream `.devcontainer/README.md` link was unavailable during this
+review; it is not evidence that this example supports a particular nested sandbox.

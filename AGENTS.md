@@ -1,32 +1,41 @@
 # Techbase Bridge
 
-Implement the accepted scope in docs/product-brief.md and docs/architecture.md.
-This is a public MIT-licensed headless service, using the official Slack Bolt and
-Codex TypeScript SDK public APIs. It has no Genny-generated source. Do not add an
-unused web application, dashboard, hosted account service, or independent Runner
-dispatch loop.
+Implement the accepted Slack-to-CLI transport in docs/product-brief.md and
+docs/architecture.md. This public MIT-licensed headless Node/TypeScript service
+uses official Slack Bolt Socket Mode, the configured Codex CLI directly, and the
+standard MCP TypeScript SDK for its sender. There is no Genny-generated source.
+Do not add a dashboard, hosted account service, scheduler or Runner dispatch loop.
+Claude/Pi are possible future adapters, not implemented support.
 
 Own only this repository. You are not alone in the codebase: preserve others'
-changes and accommodate them. Before requiring a dependency change, inspect the
-supported APIs/configuration and a correct local solution. If none meets the
-requirements, link an owning issue/PR and ask the coordinator for authorization;
-do not edit Genny, Runner, Operations, another product, or dependency internals.
+changes. Inspect supported project-local APIs before proposing a dependency fix.
+Do not edit Genny, Runner, Operations, another product or dependency internals;
+report a true owning-project dependency with its issue/PR to the coordinator.
 
-Never commit credentials, real workspace/user/channel identifiers, personal notes,
-operator configuration, session content, or native Runner state. Use fictional
-examples and fixture tests. Do not install a real Slack app, send live messages,
-run real model turns, copy an operator's Codex credentials, or deploy a service.
+Never commit credentials, real workspace/user/channel identifiers, operator
+configuration, session content or native Runner state. Use fictional examples
+and fixtures. Do not install a real Slack app, send live messages, run real model
+turns, copy personal credentials, write existing Codex configuration, provision
+privileged hosts or deploy during implementation.
 
-The first release enforces read-only model execution, explicit mentions, configured
-team/channel/user access, and safe session/queue recovery. Prompts alone do not
-enforce these boundaries. Document actual limits: filesystem read-only is not
-repository-only visibility, and model answers can contain project information.
+The current contract accepts ordinary authorized human messages by default.
+Workspace/channel/user routing and outgoing destinations are enforced in code.
+Executable, arguments and cwd come only from private operator configuration.
+Preserve normal Codex HOME/auth/configuration and operator-selected permissions;
+do not impose a separate OS account, isolated home, read-only policy, disabled
+MCP/apps/tools or bypass flags. Bridge guarantees routing and invocation, not a
+filesystem sandbox or confidentiality of model output. Isolation is a deployment
+choice. Never relax Codex policy to make container verification pass.
 
-Use minimal standard TypeScript/Node concepts, SQLite only for required durable
-state, and node:test. Meaningful tests must cover routing/access, retry/session
-recovery, cancellation, Slack output safety, and real SDK invocation configuration
-with a fake executable. Run npm ci, typecheck/build, tests, and npm audit. Review
-the complete diff. State external integration tests that remain unperformed.
+Use simple TypeScript/Node concepts, the existing SQLite store for durable state,
+and node:test. Cover routing/access, bot loops, static CLI/stdin/environment,
+real MCP round trips, no-model pinned CLI configuration compatibility,
+continuation, bounded admission, deduplication, cancellation, timeouts, shutdown,
+restart, uncertain delivery, safe output and doctor. Run npm ci, typecheck/build,
+tests and npm audit sequentially. Review the complete diff and public examples.
+Report external Slack/model/OS/container checks not performed. An unavailable
+Docker engine leaves optional packaging unverified; it must not block native core.
 
-Runner owns execution, review, and evidence. A coordinator publishes the required
-Techbase ownership status from Operations. Human merge review remains enabled.
+Runner owns execution, review, commits and evidence. A coordinator publishes the
+trusted Operations ownership check for the exact reviewed head. Human merge
+review remains enabled; do not merge, deploy or mutate native Runner state.

@@ -1,47 +1,41 @@
-# Example conversation
+# Fictional conversation
 
-Fictional transcript. Short request labels below stand in for generated UUIDs.
-Every Bridge message is in the originating Slack thread. A follow-up must mention
-the bot explicitly; ordinary channel messages are ignored.
+Default mode accepts ordinary messages from configured human users. Every Bridge
+control/fallback reply stays in the originating thread; Codex may explicitly choose
+a configured outgoing alias through its tool. Request labels stand in for UUIDs.
 
 ```text
-Alice:  @Bridge help
-Bridge: Mention Bridge with a project question to start or continue this thread.
-        Read-only: no implementation, deployment, or external actions.
-        Mention Bridge with help, status, or cancel. Only the requester or a
-        configured operator may cancel a request.
+Alice:  help
+Bridge: Send a message to start or continue a Codex CLI conversation in this thread
+        (mention Bridge if mention-only mode is configured). Codex uses the
+        operator’s existing permissions and preset. Use help, status, or cancel.
+        Only the requester or a configured operator may cancel a request.
 
-Alice:  @Bridge Where does this project validate incoming records?
-Bridge: Queued request A. I’ll answer here when the read-only turn finishes.
+Alice:  Explain how imports are validated in this project.
+Bridge: Queued request A. Codex will reply here or use a configured outgoing destination.
 Bridge: Completed request A.
-        The request handler calls validateRecord in src/records.ts. I found the
-        validation path in source; I haven’t checked a live upstream payload.
+        Imports validate required fields in src/import.ts. I inspected the code;
+        I have not checked a live upstream payload.
 
-Alice:  @Bridge I meant the import path. Please correct that answer.
-Bridge: Queued request B. I’ll answer here when the read-only turn finishes.
-Bridge: Completed request B.
-        The import path validates rows in src/import.ts. My previous answer
-        described the HTTP path. The two entry points have different checks.
+Alice:  Send that summary to the updates channel too.
+Bridge: Queued request B. Codex will reply here or use a configured outgoing destination.
+        [Codex calls send_message with destination="updates".]
+        [The summary appears in the predefined updates channel. No duplicate
+         automatic final answer is posted in this thread.]
 
-Alice:  @Bridge Explain the largest files next.
-Bridge: Queued request C. I’ll answer here when the read-only turn finishes.
-Alice:  @Bridge cancel
+Alice:  status
+Bridge: Request B: completed. Outcome delivered.
+
+Alice:  Check the slow validation path next.
+Bridge: Queued request C. Codex will reply here or use a configured outgoing destination.
+Alice:  cancel
 Bridge: Cancellation requested for 1 request(s). Active turns must stop before
         the next turn starts.
 Bridge: Request C cancelled. No automatic retry.
-
-Alice:  @Bridge Which import checks should we add?
-Bridge: Queued request D. I’ll answer here when the read-only turn finishes.
-Bridge: Request D failed (model_failed). No completed answer is available.
-        An operator can check the safe diagnostic ID; mention Bridge again to retry.
-Alice:  @Bridge Which import checks should we add? Please try again.
-Bridge: Queued request E. I’ll answer here when the read-only turn finishes.
-Bridge: Completed request E.
-        Consider checks for duplicate identifiers and empty required fields.
-        These are proposals for review; I have not changed the project.
 ```
 
-After a crash, `@Bridge status` reports an interrupted request and explains that
-it is never replayed automatically. If Codex completed but the Slack send failed,
-status instead reports `completed` with uncertain outcome delivery. The person
-can ask explicitly for another answer; Bridge never silently reruns the turn.
+A failed/partial send is uncertain: `status` reports it separately from CLI
+completion and explains that the turn will not be replayed. After a crash, queued
+and active requests become interrupted. Ask again only if you intend a new turn;
+Codex actions already performed are not undone. In mention-only mode, prefix each
+message/control with `@Bridge`. Bot-generated messages never start another turn.

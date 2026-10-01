@@ -3,46 +3,40 @@ import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import { loadConfig, parseConfig, secretsFromEnvironment } from '../src/config.js';
-import { checkConfigurationFiles } from '../src/codex.js';
 import { fixture } from './helpers.js';
 
-test('configuration rejects empty/unknown access, unsafe paths, policy overrides and invalid limits', t => {
+test('configuration rejects ambiguous routing, obsolete policies, command injection and invalid limits', t => {
   const { config, root } = fixture(t);
   for (const invalid of [
-    { teamId: '' }, { allowedUserIds: [] }, { channels: {} }, { operatorUserIds: ['UEVE'] },
-    { hostPolicyReviewed: false }, { sandboxMode: 'workspace-write' }, { maxPending: 0 },
-    { maxConcurrentProjects: 100 }, { retentionMs: 60_000, queueTtlMs: 61_000 },
-    { channels: { CPROJECT: 'relative' } }, { codexHome: config.stateDir },
-    { channels: { CPROJECT: config.stateDir } },
+    { teamId: '' }, { allowedUserIds: [] }, { incomingChannelIds: [] }, { operatorUserIds: ['UEVE'] },
+    { hostPolicyReviewed: true }, { codexHome: root }, { maxPending: 0 }, { mentionOnly: 'false' },
+    { retentionMs: 60_000, queueTtlMs: 61_000 }, { outgoingChannels: { thread: 'COTHER' } },
+    { outgoingChannels: { arbitrary: 'not-an-id' } },
+    { codex: { ...config.codex, cwd: 'relative' } },
+    { codex: { ...config.codex, executable: 'codex; touch /tmp/oops' } },
+    { codex: { ...config.codex, args: ['exec', 'a model prompt'] } },
+    { codex: { ...config.codex, args: ['--last'] } },
+    { codex: { ...config.codex, args: ['--profile'] } },
   ]) assert.throws(() => parseConfig({ ...config, ...invalid }));
-  const alias = path.join(root, 'alias'); symlinkSync(config.codexHome, alias);
-  assert.throws(() => parseConfig({ ...config, codexHome: alias }), /symlink/);
+  const alias = path.join(root, 'alias'); symlinkSync(config.stateDir, alias);
+  assert.throws(() => parseConfig({ ...config, stateDir: alias }), /symlink/);
   chmodSync(config.stateDir, 0o755);
   assert.throws(() => parseConfig(config), /0700/);
-  chmodSync(config.stateDir, 0o500);
-  assert.throws(() => parseConfig(config), /0700/);
-  chmodSync(config.stateDir, 0o700);
-  const previous = process.env.CODEX_HOME;
-  t.after(() => { if (previous === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = previous; });
-  process.env.CODEX_HOME = alias;
-  assert.throws(() => parseConfig(config), /outside the inherited/);
 });
 
-test('configuration fixes canonical project aliases and only reads redaction names from the operator environment', t => {
+test('normal configuration and explicit operator permissions are accepted; cwd is canonical and redaction values stay in environment', t => {
   const { config, root } = fixture(t);
-  const alias = path.join(root, 'project-alias'); symlinkSync(config.channels.CPROJECT!, alias);
-  const result = parseConfig({ ...config, channels: { CPROJECT: alias }, secretEnvNames: ['FIXTURE_SECRET'] });
-  assert.equal(result.channels.CPROJECT, config.channels.CPROJECT);
+  mkdirSync(path.join(config.codex.cwd, '.codex'));
+  writeFileSync(path.join(config.codex.cwd, '.codex/config.toml'), 'sandbox_mode="workspace-write"\n');
+  const alias = path.join(root, 'project-alias'); symlinkSync(config.codex.cwd, alias);
+  const result = parseConfig({ ...config, codex: { ...config.codex, cwd: alias, args: ['--profile', 'slack', '--sandbox', 'workspace-write'] }, secretEnvNames: ['FIXTURE_SECRET'] });
+  assert.equal(result.codex.cwd, config.codex.cwd);
+  assert.equal(result.mentionOnly, false);
   assert.deepEqual(secretsFromEnvironment(result, { SLACK_BOT_TOKEN: 'fixture-token', FIXTURE_SECRET: 'fixture-secret', UNRELATED: 'do-not-use' }), ['fixture-token', 'fixture-secret']);
   const file = path.join(root, 'config.json'); writeFileSync(file, JSON.stringify(result));
   assert.deepEqual(loadConfig(file), result);
   writeFileSync(file, 'PRIVATE invalid JSON');
   assert.throws(() => loadConfig(file), error => error instanceof Error && !error.message.includes('PRIVATE'));
-});
-
-test('project-local Codex configuration cannot silently expand runtime policy', t => {
-  const { config } = fixture(t);
-  mkdirSync(path.join(config.channels.CPROJECT!, '.codex'));
-  writeFileSync(path.join(config.channels.CPROJECT!, '.codex/config.toml'), 'approval_policy="on-request"\n');
-  assert.throws(() => checkConfigurationFiles(config, config.channels.CPROJECT!), /Custom or managed/);
+  assert.deepEqual(parseConfig({ ...config, outgoingChannels: {} }).outgoingChannels, {});
+  assert.ok(parseConfig({ ...config, codex: { ...config.codex, args: ['--dangerously-bypass-approvals-and-sandbox'] } }));
 });

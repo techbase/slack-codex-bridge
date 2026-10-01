@@ -1,4 +1,4 @@
-name: Verify
+name: Verify CLI bridge
 on:
   pull_request:
   push:
@@ -15,8 +15,11 @@ jobs:
         with:
           node-version-file: .node-version
           cache: npm
-      - run: npm ci
+      - name: Install locked CLI, Bolt and MCP dependencies
+        run: npm ci
       - run: npm run typecheck
       - run: npm run build
-      - run: npm test
-      - run: npm audit --audit-level=moderate
+      - name: Fixture transport, lifecycle and no-model CLI compatibility tests
+        run: npm test
+      - name: Audit dependencies (required; no advisory-endpoint bypass)
+        run: npm audit --audit-level=moderate

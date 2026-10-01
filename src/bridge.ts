@@ -2,6 +2,7 @@ import { ModelFailure, type Model } from './codex.js';
 import type { Config } from './config.js';
 import { sendText, type SlackSender } from './output.js';
 import { Store, type Job, type Scope } from './store.js';
+import { TurnSender } from './send.js';
 
 export interface Clock {
   now(): number;
@@ -22,25 +23,25 @@ export function route(config: Config, value: unknown, now: number): Routed | und
   const body = object(value);
   const event = object(body?.event);
   if (!body || !event || body.type !== 'event_callback' || body.team_id !== config.teamId
-      || event.type !== 'app_mention' || event.subtype !== undefined || event.bot_id !== undefined
+      || event.type !== 'message' || event.subtype !== undefined || event.bot_id !== undefined
       || event.bot_profile !== undefined || event.hidden === true || event.edited !== undefined
       || (event.team !== undefined && event.team !== config.teamId)
       || (event.user_team !== undefined && event.user_team !== config.teamId)
       || body.is_ext_shared_channel === true || event.is_ext_shared_channel === true
       || typeof event.user !== 'string' || event.user === config.botUserId || !config.allowedUserIds.includes(event.user)
-      || typeof event.channel !== 'string' || !Object.hasOwn(config.channels, event.channel)
+      || typeof event.channel !== 'string' || !config.incomingChannelIds.includes(event.channel)
       || typeof body.event_id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(body.event_id)
       || typeof body.event_time !== 'number' || !Number.isSafeInteger(body.event_time)
       || body.event_time * 1000 < now - config.retentionMs || body.event_time * 1000 > now + 300_000
       || typeof event.ts !== 'string' || !/^\d{1,16}\.\d{6}$/.test(event.ts)
       || (event.thread_ts !== undefined && (typeof event.thread_ts !== 'string' || !/^\d{1,16}\.\d{6}$/.test(event.thread_ts)))
-      || typeof event.text !== 'string' || !event.text.includes(`<@${config.botUserId}>`)) return;
+      || typeof event.text !== 'string' || (config.mentionOnly && !event.text.includes(`<@${config.botUserId}>`))) return;
   const prompt = event.text.replaceAll(`<@${config.botUserId}>`, '').trim();
   return { team: config.teamId, channel: event.channel, root: (event.thread_ts as string | undefined) ?? event.ts,
-    project: config.channels[event.channel]!, user: event.user, eventId: body.event_id, prompt };
+    project: config.codex.cwd, user: event.user, eventId: body.event_id, prompt };
 }
 
-const HELP = 'Mention Bridge with a project question to start or continue this thread. Read-only: no implementation, deployment, or external actions. Mention Bridge with help, status, or cancel. Only the requester or a configured operator may cancel a request.';
+const HELP = 'Send a message to start or continue a Codex CLI conversation in this thread (mention Bridge if mention-only mode is configured). Codex uses the operator’s existing permissions and preset. Use help, status, or cancel. Only the requester or a configured operator may cancel a request.';
 
 export class Bridge {
   private closing = false;
@@ -87,7 +88,7 @@ export class Bridge {
     }
     const job = this.store.enqueue(routed, routed.eventId, routed.user, routed.prompt, this.clock.now());
     if (!job) { await this.reply(routed, 'Bridge is busy; the queue is full. Nothing was queued. Please ask again later.'); return; }
-    const sent = await this.reply(job, `Queued request ${job.id}. I’ll answer here when the read-only turn finishes.`);
+    const sent = await this.reply(job, `Queued request ${job.id}. Codex will reply here or use a configured outgoing destination.`);
     this.store.acknowledge(job.id, sent ? 'sent' : 'uncertain');
     if (!sent) {
       // A concurrent cancel command may already have terminated the queued job.
@@ -142,13 +143,13 @@ export class Bridge {
     for (const job of this.store.queued()) {
       if (this.clock.now() - job.created >= this.config.queueTtlMs) {
         this.store.finish(job.id, 'interrupted', 'queue_expired', this.clock.now());
-        this.track(this.deliver(job, 'Request expired while queued. Nothing ran; mention Bridge again to ask.'));
+        this.track(this.deliver(job, 'Request expired while queued. Nothing ran; send another message to ask.'));
         continue;
       }
       // Preserve arrival order within a project while Slack acknowledges it.
       if (job.ack !== 'sent') awaitingAcknowledgement.add(job.project);
       if (awaitingAcknowledgement.has(job.project)) continue;
-      if (this.active.has(job.project) || this.active.size >= this.config.maxConcurrentProjects) continue;
+      if (this.active.has(job.project) || this.active.size >= 1) continue;
       this.store.activate(job.id, this.clock.now());
       const active = { job, controller: new AbortController(), done: Promise.resolve() } as { job: Job; controller: AbortController; done: Promise<void>; reason?: 'cancelled' | 'timed_out' | 'interrupted' };
       this.active.set(job.project, active);
@@ -168,24 +169,27 @@ export class Bridge {
     const stopTimeout = this.clock.timer(() => { active.reason ??= 'timed_out'; controller.abort(); }, this.config.turnTimeoutMs);
     let answer = '';
     let failure: string | undefined;
+    const turnSender = new TurnSender(this.config, job, this.store, this.sender, this.secrets, controller.signal);
     try {
       this.store.touchThread(job, this.clock.now());
       answer = await this.model.run({ project: job.project, prompt: job.prompt!, threadId: this.store.thread(job), signal: controller.signal,
-        onThread: id => this.store.saveThread(job, id, this.clock.now()) });
-      if (typeof answer !== 'string' || !answer.trim()) failure = 'invalid_result';
+        onThread: id => this.store.saveThread(job, id, this.clock.now()), sendMessage: turnSender.send });
+      if (!turnSender.attempted && (typeof answer !== 'string' || !answer.trim())) failure = 'invalid_result';
     } catch (error) {
       failure = error instanceof ModelFailure ? error.reason : 'model_failed';
-    } finally { stopTimeout(); }
+    } finally { await turnSender.settled(); stopTimeout(); }
     const state = active.reason ?? (failure ? 'failed' : 'completed');
     this.store.finish(job.id, state, failure ?? active.reason ?? null, this.clock.now());
     this.store.touchThread(job, this.clock.now());
     if (failure && !active.reason) this.diagnostic(failure, job.id);
     const output = state === 'completed' ? `Completed request ${job.id}.\n\n${answer}`
       : state === 'cancelled' ? `Request ${job.id} cancelled. No automatic retry.`
-      : state === 'timed_out' ? `Request ${job.id} timed out and was stopped. Mention Bridge again to retry explicitly.`
+      : state === 'timed_out' ? `Request ${job.id} timed out and was stopped. Send another message to retry explicitly.`
       : state === 'interrupted' ? `Request ${job.id} interrupted by shutdown. It will not be replayed.`
-      : `Request ${job.id} failed (${failure}). No completed answer is available. An operator can check the safe diagnostic ID; mention Bridge again to retry.`;
-    await this.deliver(job, output);
+      : `Request ${job.id} failed (${failure}). No completed answer is available. An operator can check the safe diagnostic ID; send another message to retry.`;
+    // A tool send is already the outcome, including ambiguous/partial delivery.
+    // Never duplicate it with automatic final text, even if the CLI later fails.
+    if (!turnSender.attempted) await this.deliver(job, output);
   }
 
   private async deliver(job: Job, text: string): Promise<void> {
@@ -196,7 +200,12 @@ export class Bridge {
 
   private async reply(scope: Scope, text: string, jobId?: string): Promise<boolean> {
     try {
-      await sendText(this.sender, scope.channel, scope.root, text, this.secrets, this.config.maxOutputChars);
+      const sender: SlackSender = { post: async message => {
+        if (scope.team !== this.config.teamId || !this.config.incomingChannelIds.includes(message.channel)
+            || message.channel !== scope.channel || message.thread_ts !== scope.root) throw new Error('unauthorized_destination');
+        await this.sender.post(message);
+      } };
+      await sendText(sender, scope.channel, scope.root, text, this.secrets, this.config.maxOutputChars);
       return true;
     } catch {
       this.diagnostic('slack_delivery_uncertain', jobId);
