@@ -1,0 +1,21 @@
+{
+  "teamId": "TEXAMPLE",
+  "botUserId": "UBRIDGE",
+  "allowedUserIds": ["UALICE", "UOPERATOR"],
+  "operatorUserIds": ["UOPERATOR"],
+  "channels": {
+    "CPROJECT": "/srv/projects/example"
+  },
+  "stateDir": "/srv/bridge/state",
+  "codexHome": "/srv/bridge/codex",
+  "hostPolicyReviewed": false,
+  "secretEnvNames": [],
+  "maxPending": 20,
+  "maxConcurrentProjects": 2,
+  "maxInputChars": 12000,
+  "maxOutputChars": 24000,
+  "turnTimeoutMs": 300000,
+  "queueTtlMs": 900000,
+  "retentionMs": 604800000,
+  "maxRetainedEvents": 10000
+}

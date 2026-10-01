@@ -1,0 +1,24 @@
+{
+  "name": "@techbase/slack-codex-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted, read-only Slack conversations with local Codex projects",
+  "license": "MIT",
+  "type": "module",
+  "engines": { "node": ">=24.16.0" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test --test-timeout=30000 dist/test/*.test.js",
+    "start": "node dist/src/main.js",
+    "doctor": "node dist/src/main.js doctor"
+  },
+  "dependencies": {
+    "@openai/codex-sdk": "0.159.3",
+    "@slack/bolt": "5.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.0.0",
+    "typescript": "5.9.3"
+  }
+}

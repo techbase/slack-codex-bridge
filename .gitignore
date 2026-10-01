@@ -5,9 +5,13 @@ coverage/
 .env.*
 !.env.example
 bridge.config.json
+!examples/bridge.config.json
 var/
 .codex/
 .cortexium/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+*.sqlite-journal
+.bridge-state/
+.codex-home/
