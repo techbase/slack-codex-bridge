@@ -45,6 +45,9 @@ manifest, native/server operation, migration and the optional Docker example.
   `status` and `cancel` are local controls (also usable with a bot mention).
 - Each Slack thread has its own saved CLI session ID. Requests are bounded,
   deduplicated and serialized through the fixed CLI working directory.
+- Messages with attachments also forward their text, including thread replies.
+  Queue acknowledgements explain that file contents are not forwarded. An
+  attachment-only message gets a reply asking for text and starts no CLI turn.
 - Messages cannot select executable, arguments, cwd or arbitrary Slack destinations.
   They remain prompts to Codex, whose permissions are consequential operator settings.
 - Codex receives `techbase_bridge.send_message` with a default `thread` destination

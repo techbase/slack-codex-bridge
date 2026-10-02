@@ -48,10 +48,23 @@ test('real Bolt event boundary and WebClient accept ordinary human messages, one
   assert.match(new URLSearchParams(posts[1]!.body).get('text')!, /&lt;!channel&gt;/);
   assert.match(new URLSearchParams(posts[1]!.body).get('text')!, /\*Answer\*/);
   assert.match(new URLSearchParams(posts[1]!.body).get('text')!, /<https:\/\/example\.invalid\|Visit site>/);
+  await app.processEvent({ body: message('real-bolt-file-reply', 'Follow up on this issue', {
+    subtype: 'file_share', files: [{ id: 'FFICTURE', url_private: 'https://files.example.invalid/screenshot.png' }],
+    ts: '1800000000.000002', thread_ts: '1800000000.000001',
+  }), ack: async () => { acknowledgements++; } });
+  assert.equal(model.calls.length, 2);
+  const followup = model.calls[1]!;
+  assert.equal(followup.request.threadId, 'fixture-thread-1');
+  assert.equal(followup.request.prompt, 'Follow up on this issue');
+  assert.match(new URLSearchParams(calls.at(-1)!.body).get('text')!, /Attachments.*text only/);
+  followup.result.resolve('Follow-up answered.'); await bridge.idle();
+  assert.equal(acknowledgements, 2);
+  assert.equal(calls.filter(call => call.url.endsWith('/chat.postMessage')).length, 4);
+  assert.ok(calls.every(call => /\/(auth.test|chat.postMessage)$/.test(call.url)));
   const previous = calls.filter(call => call.url.endsWith('/chat.postMessage')).length;
   await app.processEvent({ body: message('unauthorized', 'Question', { user: 'UEVE' }), ack: async () => {} });
   assert.equal(calls.filter(call => call.url.endsWith('/chat.postMessage')).length, previous);
-  assert.equal(model.calls.length, 1);
+  assert.equal(model.calls.length, 2);
   assert.deepEqual(logs, []);
 });
 

@@ -17,7 +17,12 @@ command subscription is needed. Mention-only mode filters those same messages.
 The app must be a channel member; startup verifies its team/bot identity.
 
 `src/bridge.ts` authorizes workspace, channel and user before storage, reply or
-execution. It excludes bot/self/subtype/edit/shared events and stale envelopes.
+execution. It accepts ordinary human messages and the human `file_share` subtype,
+including replies with `thread_ts`. It excludes other subtypes, bot/self/edit/shared
+events and stale envelopes. File contents, filenames and download URLs are not
+forwarded or fetched. Messages with files queue their text with an explicit
+attachment notice; attachment-only messages receive a text-request reply without
+starting the CLI. The CLI context also explains this text-only transport limit.
 A request gets a queue acknowledgement; an uncertain acknowledgement prevents
 execution. Controls are deterministic and cancellation is requester/operator scoped.
 The fixed cwd runs one CLI turn at a time, including across incoming channels.
