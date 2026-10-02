@@ -93,6 +93,81 @@ test('duplicate events never queue or reply twice; follow-ups resume and new thr
   assert.equal(model.calls.length, 5);
 });
 
+test('messages with files queue their text once and thread follow-ups resume the saved conversation', async t => {
+  const { bridge, model, slack, store, scope } = setup(t);
+  const files = [{ id: 'FFICTURE', url_private: 'https://files.example.invalid/private-screenshot.png' }];
+  const original = message('file-original', 'Explain this issue', { subtype: 'file_share', files });
+  await bridge.accept(original);
+  assert.equal(model.calls.length, 1);
+  assert.equal(model.calls[0]!.request.prompt, 'Explain this issue');
+  assert.equal(model.calls[0]!.request.threadId, undefined);
+  assert.match(slack.posts[0]!.text, /Queued request.*\n\n.*Attachments.*text only/s);
+  model.calls[0]!.result.resolve('Please describe the screenshot.'); await bridge.idle();
+  await bridge.accept(original);
+  assert.equal(slack.posts.length, 2);
+
+  for (const [id, subtype] of [['file-followup', 'file_share'], ['files-without-subtype', undefined]] as const) {
+    await bridge.accept(message(id, 'Here is more context', { subtype, files, ts: '1800000000.000002', thread_ts: scope.root }));
+    const call = model.calls.at(-1)!;
+    assert.equal(model.calls.length, id === 'file-followup' ? 2 : 3);
+    assert.equal(call.request.threadId, 'fixture-thread-1');
+    assert.equal(call.request.prompt, 'Here is more context');
+    assert.match(slack.posts.at(-1)!.text, /Attachments.*text only/);
+    call.result.resolve('Follow-up answered.'); await bridge.idle();
+  }
+  assert.equal(store.latest(scope)?.state, 'completed');
+  assert.equal(store.latest(scope)?.delivery, 'sent');
+  assert.ok(slack.posts.every(post => post.channel === scope.channel && post.thread_ts === scope.root));
+  assert.doesNotMatch(JSON.stringify(model.calls.map(call => call.request.prompt)) + JSON.stringify(slack.posts), /url_private|private-screenshot/);
+});
+
+test('file-share messages retain sender, workspace, channel, edit, shared and bot protections', async t => {
+  const { bridge, model, slack, store } = setup(t);
+  const files = [{ id: 'FFICTURE' }];
+  const invalid = [
+    { user: 'UEVE' }, { user: 'UBRIDGE' }, { channel: 'CUNKNOWN' },
+    { bot_id: 'BFIXTURE' }, { bot_profile: {} }, { hidden: true }, { edited: {} },
+    { team: 'TOTHER' }, { user_team: 'TOTHER' }, { is_ext_shared_channel: true },
+    { subtype: 'message_changed' }, { subtype: 'message_deleted' },
+    { subtype: 'message_replied' }, { subtype: 'bot_message' }, { subtype: 'unknown' },
+  ];
+  for (const [index, event] of invalid.entries()) {
+    await bridge.accept(message('invalid-file-' + index, 'Question', { subtype: 'file_share', files, ...event }));
+  }
+  await bridge.accept(message('file-wrong-team', 'Question', { subtype: 'file_share', files }, { team_id: 'TOTHER' }));
+  await bridge.accept(message('file-shared-envelope', 'Question', { subtype: 'file_share', files }, { is_ext_shared_channel: true }));
+  assert.deepEqual(store.counts(), { events: 0, jobs: 0, sessions: 0 });
+  assert.equal(model.calls.length, 0);
+  assert.equal(slack.posts.length, 0);
+});
+
+test('attachment-only messages explain the text limitation without queuing or replaying; mention-only still applies', async t => {
+  const { bridge, model, slack, store, scope } = setup(t);
+  const files = [{ id: 'FFICTURE' }];
+  for (const [id, event] of [
+    ['empty-file', { subtype: 'file_share', files }],
+    ['no-file-text', { subtype: 'file_share', files, text: undefined }],
+    ['ordinary-with-files', { files }],
+  ] as const) {
+    const body = message(id, '', { ...event, ts: '1800000000.000002', thread_ts: scope.root });
+    await bridge.accept(body);
+    await bridge.accept(body);
+  }
+  assert.equal(slack.posts.length, 3);
+  assert.ok(slack.posts.every(post => /attachment.*text only.*Nothing was queued/s.test(post.text)));
+  assert.ok(slack.posts.every(post => post.thread_ts === scope.root));
+  assert.equal(store.counts().jobs, 0);
+  assert.equal(model.calls.length, 0);
+
+  const restricted = setup(t, { mentionOnly: true });
+  await restricted.bridge.accept(message('implicit-file', 'Question', { subtype: 'file_share', files }));
+  assert.deepEqual(restricted.store.counts(), { events: 0, jobs: 0, sessions: 0 });
+  assert.equal(restricted.slack.posts.length, 0);
+  await restricted.bridge.accept(message('explicit-file', '<@UBRIDGE>', { subtype: 'file_share', files }));
+  assert.equal(restricted.model.calls.length, 0);
+  assert.match(restricted.slack.posts[0]!.text, /Nothing was queued/);
+});
+
 test('bounded admission serializes the fixed CLI cwd across channels', async t => {
   const { bridge, model, slack } = setup(t, { maxPending: 3 });
   await bridge.accept(message('first'));

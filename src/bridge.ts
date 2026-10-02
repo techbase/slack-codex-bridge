@@ -13,7 +13,7 @@ export const systemClock: Clock = {
   timer(callback, ms) { const timer = setTimeout(callback, ms); return () => clearTimeout(timer); },
 };
 export type Diagnostic = (reason: string, jobId?: string) => void;
-type Routed = Scope & { user: string; eventId: string; prompt: string };
+type Routed = Scope & { user: string; eventId: string; prompt: string; hasFiles: boolean };
 
 function object(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
@@ -22,8 +22,10 @@ function object(value: unknown): Record<string, unknown> | undefined {
 export function route(config: Config, value: unknown, now: number): Routed | undefined {
   const body = object(value);
   const event = object(body?.event);
+  const hasFiles = event?.subtype === 'file_share' || (Array.isArray(event?.files) && event.files.length > 0);
+  const text = event?.text === undefined && hasFiles ? '' : event?.text;
   if (!body || !event || body.type !== 'event_callback' || body.team_id !== config.teamId
-      || event.type !== 'message' || event.subtype !== undefined || event.bot_id !== undefined
+      || event.type !== 'message' || (event.subtype !== undefined && event.subtype !== 'file_share') || event.bot_id !== undefined
       || event.bot_profile !== undefined || event.hidden === true || event.edited !== undefined
       || (event.team !== undefined && event.team !== config.teamId)
       || (event.user_team !== undefined && event.user_team !== config.teamId)
@@ -35,10 +37,10 @@ export function route(config: Config, value: unknown, now: number): Routed | und
       || body.event_time * 1000 < now - config.retentionMs || body.event_time * 1000 > now + 300_000
       || typeof event.ts !== 'string' || !/^\d{1,16}\.\d{6}$/.test(event.ts)
       || (event.thread_ts !== undefined && (typeof event.thread_ts !== 'string' || !/^\d{1,16}\.\d{6}$/.test(event.thread_ts)))
-      || typeof event.text !== 'string' || (config.mentionOnly && !event.text.includes(`<@${config.botUserId}>`))) return;
-  const prompt = event.text.replaceAll(`<@${config.botUserId}>`, '').trim();
+      || typeof text !== 'string' || (config.mentionOnly && !text.includes(`<@${config.botUserId}>`))) return;
+  const prompt = text.replaceAll(`<@${config.botUserId}>`, '').trim();
   return { team: config.teamId, channel: event.channel, root: (event.thread_ts as string | undefined) ?? event.ts,
-    project: config.codex.cwd, user: event.user, eventId: body.event_id, prompt };
+    project: config.codex.cwd, user: event.user, eventId: body.event_id, prompt, hasFiles };
 }
 
 const HELP = 'Send a message to start or continue a Codex CLI conversation in this thread (mention Bridge if mention-only mode is configured). Codex uses the operator’s existing permissions and preset. Use help, status, or cancel. Only the requester or a configured operator may cancel a request.';
@@ -79,6 +81,10 @@ export class Bridge {
     const claim = this.store.claimEvent(routed.eventId, this.clock.now());
     if (claim !== 'new') { if (claim === 'full') this.diagnostic('event_capacity'); return; }
     const command = routed.prompt.toLowerCase();
+    if (command === '' && routed.hasFiles) {
+      await this.reply(routed, 'This message contains an attachment, but Bridge currently forwards text only. Describe what you want Codex to do in a message. Nothing was queued.');
+      return;
+    }
     if (command === 'help' || command === '') { await this.reply(routed, HELP); return; }
     if (command === 'status') { await this.reply(routed, this.status(routed)); return; }
     if (command === 'cancel') { await this.cancel(routed); return; }
@@ -88,7 +94,8 @@ export class Bridge {
     }
     const job = this.store.enqueue(routed, routed.eventId, routed.user, routed.prompt, this.clock.now());
     if (!job) { await this.reply(routed, 'Bridge is busy; the queue is full. Nothing was queued. Please ask again later.'); return; }
-    const sent = await this.reply(job, `Queued request ${job.id}. Codex will reply here or use a configured outgoing destination.`);
+    const attachmentNotice = routed.hasFiles ? '\n\nAttachments were not sent to Codex; this request contains text only.' : '';
+    const sent = await this.reply(job, `Queued request ${job.id}. Codex will reply here or use a configured outgoing destination.${attachmentNotice}`);
     this.store.acknowledge(job.id, sent ? 'sent' : 'uncertain');
     if (!sent) {
       // A concurrent cancel command may already have terminated the queued job.
