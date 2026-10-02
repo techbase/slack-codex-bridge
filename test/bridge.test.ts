@@ -403,7 +403,7 @@ test('mention-only mode filters ordinary text before storage but accepts an expl
   call.result.resolve('Answer'); await bridge.idle();
 });
 
-test('tool success or uncertainty suppresses final fallback, including a later CLI failure; duplicates never rerun', async t => {
+test('tool sends suppress duplicate answers, but a later CLI failure gets a terminal notice; duplicates never rerun', async t => {
   for (const uncertain of [false, true]) {
     const { bridge, model, store, scope, slack } = setup(t);
     const event = message('tool-' + uncertain);
@@ -417,13 +417,46 @@ test('tool success or uncertainty suppresses final fallback, including a later C
       call.result.resolve('Do not duplicate final');
     } else call.result.reject(new Error('PRIVATE provider error after tool success'));
     await bridge.idle();
-    assert.equal(slack.posts.length, 2);
+    assert.equal(slack.posts.length, uncertain ? 2 : 3);
+    if (!uncertain) assert.match(slack.posts.at(-1)!.text, /failed.*Codex did not finish/s);
+    assert.equal(slack.posts.filter(post => post.text === 'Tool answer').length, 1);
+    assert.doesNotMatch(JSON.stringify(slack.posts), /Do not duplicate final|PRIVATE provider error/);
     assert.equal(store.latest(scope)?.state, uncertain ? 'completed' : 'failed');
     assert.equal(store.latest(scope)?.delivery, uncertain ? 'uncertain' : 'sent');
     await bridge.accept(event);
-    assert.equal(slack.posts.length, 2);
+    assert.equal(slack.posts.length, uncertain ? 2 : 3);
     assert.equal(model.calls.length, 1);
   }
+});
+
+test('timeout, cancellation and shutdown remain visible after an earlier progress message', async t => {
+  for (const state of ['timed_out', 'cancelled', 'interrupted'] as const) {
+    const { bridge, model, slack, clock, store, scope } = setup(t, { turnTimeoutMs: 1000 });
+    await bridge.accept(message('progress-' + state));
+    await model.calls[0]!.request.sendMessage({ text: 'Starting work.' });
+    if (state === 'timed_out') clock.advance(1000);
+    else if (state === 'cancelled') await bridge.accept(message('cancel-progress', 'cancel'));
+    else await bridge.shutdown();
+    await bridge.idle();
+    assert.equal(store.latest(scope)?.state, state);
+    assert.match(slack.posts.at(-1)!.text, new RegExp(state === 'timed_out' ? 'timed out' : state));
+    assert.match(slack.posts.at(-1)!.text, /unfinished work.*Check actual results/s);
+    assert.equal(slack.posts.filter(post => post.text === 'Starting work.').length, 1);
+  }
+});
+
+test('a failure notice never retries an uncertain tool send or erases its delivery uncertainty', async t => {
+  const { bridge, model, slack, store, scope } = setup(t);
+  await bridge.accept(message('uncertain-then-failed'));
+  slack.failOn = 2;
+  assert.equal((await model.calls[0]!.request.sendMessage({ text: 'Uncertain progress.' })).ok, false);
+  model.calls[0]!.result.reject(new Error('PRIVATE provider error'));
+  await bridge.idle();
+  assert.equal(slack.posts.length, 3);
+  assert.match(slack.posts.at(-1)!.text, /failed/);
+  assert.equal(store.latest(scope)?.state, 'failed');
+  assert.equal(store.latest(scope)?.delivery, 'uncertain');
+  assert.equal(slack.posts.filter(post => post.text === 'Uncertain progress.').length, 1);
 });
 
 test('absent final output without a tool send fails; a rejected destination still allows final fallback', async t => {

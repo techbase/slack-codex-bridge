@@ -60,9 +60,11 @@ channel's top level. No workspace, raw channel or arbitrary thread argument exis
 It bounds total tool text and number of sends, serializes sends, and writes delivery
 intent before Slack. Uncertainty disables further tool sends for the turn. The CLI
 gets delivery guidance, not instructions restricting what work it may perform.
-Any tool attempt suppresses final fallback, preventing duplicate answers after
-success, partial delivery, an uncertain send or a later CLI failure. `status`
-reports CLI outcome and Slack delivery separately.
+Any tool attempt suppresses a successful final fallback, preventing duplicate
+answers after success, partial delivery or an uncertain send. A later CLI failure,
+timeout, cancellation or shutdown gets a distinct terminal notice, without
+repeating the tool message or erasing prior delivery uncertainty. `status` reports
+CLI outcome and Slack delivery separately.
 
 `src/store.ts` retains schema version 1: dedup events, jobs and session IDs keyed
 by workspace/channel/root/cwd. Prompts are cleared at terminal state; answers are
