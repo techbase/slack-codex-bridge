@@ -52,7 +52,9 @@ manifest, native/server operation, migration and the optional Docker example.
   They remain prompts to Codex, whose permissions are consequential operator settings.
 - Codex receives `techbase_bridge.send_message` with a default `thread` destination
   and configured aliases. If any tool send was attempted, Bridge suppresses the
-  automatic final answer. Otherwise it posts the final CLI answer in the thread.
+  automatic successful final answer. Otherwise it posts the final CLI answer in
+  the thread. A failure, timeout, cancellation or shutdown still gets a terminal
+  notice, even after Codex has sent a progress message.
 - Replies use Slack formatting with bold headings, spacing and clickable web
   links. Mentions and link/media previews stay disabled.
 - Uncertain sends are never automatically retried. Restart never replays queued

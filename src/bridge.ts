@@ -193,16 +193,20 @@ export class Bridge {
       : state === 'cancelled' ? `Request ${job.id} cancelled. No automatic retry.`
       : state === 'timed_out' ? `Request ${job.id} timed out and was stopped. Send another message to retry explicitly.`
       : state === 'interrupted' ? `Request ${job.id} interrupted by shutdown. It will not be replayed.`
-      : `Request ${job.id} failed (${failure}). No completed answer is available. An operator can check the safe diagnostic ID; send another message to retry.`;
-    // A tool send is already the outcome, including ambiguous/partial delivery.
-    // Never duplicate it with automatic final text, even if the CLI later fails.
-    if (!turnSender.attempted) await this.deliver(job, output);
+      : `Request ${job.id} failed (${failure}). Codex did not finish this turn. An operator can check the safe diagnostic ID; no automatic retry.`;
+    // Suppress duplicate successful answers, but an earlier progress send must
+    // not hide a later failure, timeout, cancellation or shutdown.
+    if (!turnSender.attempted || state !== 'completed') {
+      const partial = turnSender.attempted ? '\n\nEarlier messages may describe unfinished work. Check actual results before retrying.' : '';
+      await this.deliver(job, output + partial);
+    }
   }
 
   private async deliver(job: Job, text: string): Promise<void> {
-    this.store.delivery(job.id, 'sending');
+    const priorUncertainty = this.store.job(job.id)?.delivery === 'uncertain';
+    this.store.delivery(job.id, priorUncertainty ? 'uncertain' : 'sending');
     const sent = await this.reply(job, text, job.id);
-    this.store.delivery(job.id, sent ? 'sent' : 'uncertain');
+    this.store.delivery(job.id, sent && !priorUncertainty ? 'sent' : 'uncertain');
   }
 
   private async reply(scope: Scope, text: string, jobId?: string): Promise<boolean> {
