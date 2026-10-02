@@ -63,6 +63,15 @@ subscriptions. Do not add `chat:write.public`: invite the bot to every incoming
 and outgoing channel instead. Set team, bot-user and permitted human-user IDs
 explicitly. Bridge does not discover channels or expand access from Slack text.
 
+The manifest sets `features.bot_user.always_online` to `true`, so new apps show
+Slack's green availability dot. For an existing app, open
+[Your Apps](https://api.slack.com/apps) → your Bridge app → **App Home**, and enable
+**Always Show My Bot as Online** under **Your App's Presence in Slack**.
+Slack's [bot presence setting](https://docs.slack.dev/apis/web-api/user-presence-and-status/#events-api-bots)
+is static for Events API/Socket Mode apps: the dot remains green even if Bridge
+stops. It is not a connection or health check. No extra presence scope or polling
+is needed; disable the setting if you prefer the default away indicator.
+
 **Migrating an old app:** update subscriptions/scopes from the former
 `app_mention`/`app_mentions:read` manifest, reinstall/re-authorize the app to grant
 history scopes, and invite it to the configured channels. Changing repository
@@ -173,9 +182,11 @@ Slack-prefixed variables and exact-value aliases are omitted from the CLI env.
 
 ## Recovery and retention
 
-An accepted request gets one queue acknowledgement. If its delivery is uncertain,
-Bridge does not execute the request. Event IDs are claimed before admission;
-a crash between claim and acknowledgement can lose work rather than replay it.
+Ordinary accepted requests start without an initial queue reply. `status` still
+reports queued and active work. Messages with attachments get a text-only notice;
+if that notice's delivery is uncertain, Bridge does not execute the request.
+Event IDs are claimed before admission; a crash between claim and admission can
+lose work rather than replay it.
 Events older than retention or over five minutes in the future are ignored.
 Keep host clocks synchronized. At dedup capacity, new events are ignored with a
 safe local reason code rather than evicting retry protection.

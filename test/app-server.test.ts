@@ -113,7 +113,7 @@ test('native question identifiers remain opaque data when constructing answer ma
 test('uncertain approval delivery stops the native turn without approving or retrying', async t => {
   const { config, model, records } = fake(t);
   const store = new Store(config, NOW);
-  const slack = new RecordingSlack(); slack.failOn = 2;
+  const slack = new RecordingSlack(); slack.failOn = 1;
   const bridge = new Bridge(config, store, model, slack, [], () => {}, new ManualClock());
   t.after(async () => { await bridge.shutdown(); store.close(); });
   await bridge.accept(message('uncertain-prompt', 'approval'));

@@ -50,13 +50,14 @@ manifest, native/server operation, migration and the optional Docker example.
 - Ordinary messages trigger by default; `mentionOnly: true` is optional. `help`,
   `status` and `cancel` are local controls (also usable with a bot mention).
 - Each Slack thread has its own saved CLI session ID. Requests are bounded,
-  deduplicated and serialized through the fixed CLI working directory.
+  deduplicated and serialized through the fixed CLI working directory. Ordinary
+  requests start quietly; use `status` to see active or queued work.
 - In app-server mode, native command/file/permission approvals, questions and MCP
   elicitations are returned to the originating thread. Bridge never approves them
   automatically. `status` shows pending prompts; `cancel` stops a waiting turn.
   Set `turnTimeoutMs: 0` to disable the turn deadline explicitly.
 - Messages with attachments also forward their text, including thread replies.
-  Queue acknowledgements explain that file contents are not forwarded. An
+  A short notice explains that file contents are not forwarded. An
   attachment-only message gets a reply asking for text and starts no CLI turn.
 - Messages cannot select executable, arguments, cwd or arbitrary Slack destinations.
   They remain prompts to Codex, whose permissions are consequential operator settings.

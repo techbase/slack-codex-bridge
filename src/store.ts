@@ -13,7 +13,8 @@ export interface Job extends Scope {
   user: string;
   prompt: string | null;
   state: JobState;
-  ack: 'pending' | 'sent' | 'uncertain';
+  // Retain the schema's original column for the optional attachment notice.
+  ack: 'pending' | 'sent' | 'uncertain' | 'skipped';
   delivery: Delivery;
   reason: string | null;
   created: number;
@@ -116,7 +117,7 @@ export class Store {
     return this.db.prepare("SELECT * FROM jobs WHERE team=? AND channel=? AND root=? AND project=? AND state IN ('queued','active') ORDER BY created, rowid")
       .all(scope.team, scope.channel, scope.root, scope.project) as unknown as Job[];
   }
-  acknowledge(id: string, state: 'sent' | 'uncertain'): void {
+  acknowledge(id: string, state: 'sent' | 'uncertain' | 'skipped'): void {
     this.db.prepare('UPDATE jobs SET ack=? WHERE id=?').run(state, id);
   }
   activate(id: string, now: number): void {
