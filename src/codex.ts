@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { SetupError, type Config } from './config.js';
 import { MCP_NAME, mcpOverrides, openSender } from './mcp.js';
 import type { SendMessage } from './send.js';
+import type { Interact } from './interaction.js';
 
 export const CODEX_VERSION = '0.159.3';
 
@@ -14,7 +15,7 @@ export function childEnvironment(env = process.env): Record<string, string> {
 }
 
 export class ModelFailure extends Error {
-  constructor(readonly reason: 'model_failed' | 'invalid_result' | 'cli_unavailable') { super(reason); }
+  constructor(readonly reason: 'model_failed' | 'invalid_result' | 'cli_unavailable' | 'interaction_required' | 'unsupported_interaction') { super(reason); }
 }
 
 /** One process group per invocation, no shell; await termination before reuse. */
@@ -94,9 +95,14 @@ export async function preflight(config: Config, env = process.env): Promise<void
     if ((await runLocalCli(config, ['--version'], env)).trim() !== `codex-cli ${CODEX_VERSION}`) {
       throw new SetupError(`Use Codex CLI ${CODEX_VERSION}; other versions have not been verified by this release.`);
     }
-    const help = await runLocalCli(config, ['exec', '--help'], env);
-    const resume = await runLocalCli(config, ['exec', '--json', 'resume', '--help'], env);
-    if (!help.includes('--json') || !help.includes('stdin') || !resume.includes('SESSION_ID')) throw new SetupError('Configured CLI lacks the required noninteractive interfaces.');
+    if (config.codex.transport === 'app-server') {
+      const help = await runLocalCli(config, ['app-server', '--help'], env);
+      if (!help.includes('--listen') || !help.includes('stdio')) throw new SetupError('Configured CLI lacks the app-server stdio interface.');
+    } else {
+      const help = await runLocalCli(config, ['exec', '--help'], env);
+      const resume = await runLocalCli(config, ['exec', '--json', 'resume', '--help'], env);
+      if (!help.includes('--json') || !help.includes('stdin') || !resume.includes('SESSION_ID')) throw new SetupError('Configured CLI lacks the required noninteractive interfaces.');
+    }
     const existing: unknown = await listMcp(config, false, env);
     if (!Array.isArray(existing) || existing.some(server => server?.name === MCP_NAME)) throw new SetupError(`The MCP name ${MCP_NAME} is reserved for Bridge; rename an existing entry before starting.`);
     const merged: unknown = await listMcp(config, true, env);
@@ -117,8 +123,13 @@ export interface ModelRequest {
   signal: AbortSignal;
   onThread(id: string): void;
   sendMessage: SendMessage;
+  interact?: Interact;
 }
 export interface Model { run(request: ModelRequest): Promise<string> }
+
+export function slackContext(config: Config): string {
+  return `This request arrived through Slack Bridge. Bridge forwards message text only; Slack attachment contents are not supplied. If the task depends on an attachment, ask for a description rather than assuming you have seen it. Use the ${MCP_NAME} MCP send_message tool for replies. Format tool messages and final answers using Slack mrkdwn: *bold* for short headings and key names, blank lines between sections, and short bullet lists. Use <https://example.com|descriptive label> for web links, or bare HTTP/HTTPS URLs. Do not use Markdown heading hashes, **bold**, Markdown links, tables or escaped line breaks. Mentions and link previews are disabled. Destination defaults to the originating thread (thread); configured channel aliases: ${Object.keys(config.outgoingChannels).join(', ') || '(none)'}. After any tool send, Bridge does not repeat your final answer. If you do not send through the tool, Bridge posts your final answer in the originating thread. Never retry an uncertain delivery.\n\nSlack message:\n`;
+}
 
 export class CodexModel implements Model {
   constructor(private config: Config, private env = process.env) {}
@@ -130,7 +141,7 @@ export class CodexModel implements Model {
       const args = [...this.config.codex.args, ...mcpOverrides(this.config.codex.sendToolApprovalMode), 'exec', '--json'];
       if (request.threadId) args.push('resume', request.threadId);
       args.push('-');
-      const context = `This request arrived through Slack Bridge. Bridge forwards message text only; Slack attachment contents are not supplied. If the task depends on an attachment, ask for a description rather than assuming you have seen it. Use the ${MCP_NAME} MCP send_message tool for replies. Format tool messages and final answers using Slack mrkdwn: *bold* for short headings and key names, blank lines between sections, and short bullet lists. Use <https://example.com|descriptive label> for web links, or bare HTTP/HTTPS URLs. Do not use Markdown heading hashes, **bold**, Markdown links, tables or escaped line breaks. Mentions and link previews are disabled. Destination defaults to the originating thread (thread); configured channel aliases: ${Object.keys(this.config.outgoingChannels).join(', ') || '(none)'}. After any tool send, Bridge does not repeat your final answer. If you do not send through the tool, Bridge posts your final answer in the originating thread. Never retry an uncertain delivery.\n\nSlack message:\n`;
+      const context = slackContext(this.config);
       let started = false;
       let completed = false;
       let final = '';

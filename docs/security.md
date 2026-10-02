@@ -51,10 +51,23 @@ are bounded and stop after uncertain delivery. Neither provider errors nor raw
 stderr are printed; logs contain bounded fixed reason codes and generated job IDs.
 There are no automatic model retries, send retries or restart replays.
 
+The optional app-server transport relays native approvals and questions without
+making authorization decisions. Replies are bound to the active turn, originating
+team/channel/thread and requester or configured operator. Prompt IDs expire when
+resolved, cancelled, interrupted or restarted; replies are consumed once. Only
+explicit human approval grants a native request. Bridge does not persist approval
+rules or credentials. Native secret-input prompts fail rather than asking for
+secrets in Slack. An uncertain prompt send stops the turn without approving it.
+Explicitly disabling the deadline leaves a turn waiting until the user responds,
+cancels, or the service stops.
+
 Compatibility evidence is pinned to CLI 0.159.3, including its installed help,
 no-model MCP listing, and the public
 [JSONL event definitions](https://github.com/openai/codex/blob/rust-v0.159.3/codex-rs/exec/src/exec_events.rs).
-The adapter uses the supported event envelope and explicit session IDs. Recheck
+The exec adapter uses the supported event envelope and explicit session IDs. The
+app-server adapter follows the pinned CLI's generated v2 stdio protocol and the
+official [app-server documentation](https://learn.chatgpt.com/docs/app-server).
+It retains normal harness configuration and tools. Recheck
 those contracts when updating the pin. The official
 [permissions guidance](https://learn.chatgpt.com/docs/agent-approvals-security)
 describes Codex controls; Bridge does not attest their host-level enforcement.

@@ -6,10 +6,10 @@ Use Node 24.16.0+ on macOS or Linux and an existing working Codex CLI 0.159.3
 setup. The locked dependency provides that CLI under `node_modules/.bin/codex`;
 you can select its absolute path or your matching existing executable. No separate
 OS account, new CODEX_HOME or fresh login is required. Your existing Codex config,
-profiles, MCP servers, apps and permissions remain relevant. Verify that the
-chosen preset can operate noninteractively; Bridge does not implement an approval
-conversation or add permission flags. A request that cannot proceed can fail or
-reach its timeout. Choose isolation and permissions to suit your deployment.
+profiles, MCP servers, apps and permissions remain relevant. Choose the native
+`app-server` transport to answer harness approvals and questions through Slack,
+or `exec` for an intentionally noninteractive preset. Bridge adds no permission
+flags automatically. Choose isolation and permissions to suit your deployment.
 
 ```sh
 npm ci
@@ -81,7 +81,9 @@ if it maps to the incoming channel. An empty outgoing map allows only thread rep
 Everyone with channel visibility may read output, including people not allowed
 to invoke Bridge. Do not configure aliases with inappropriate audiences.
 
-`codex.args` contains **global CLI options**, before Bridge's `exec` subcommand.
+`codex.transport` is `"exec"` by default, or `"app-server"` for the native
+bidirectional stdio protocol. `codex.args` contains **global CLI options**, before
+the selected subcommand.
 Use separate argument/value entries, for example `["--profile", "slack"]` or
 `["--sandbox", "workspace-write", "--ask-for-approval", "never"]` only if those are
 your intended permissions. Supported value options are `--config`/`-c`,
@@ -101,8 +103,44 @@ sandbox permissions and other MCP tools retain their normal configuration. Omit
 this field to inherit Codex's usual MCP approval behavior. The other supported
 [per-tool modes](https://learn.chatgpt.com/docs/extend/mcp#other-configuration-options)
 are `"auto"`, `"prompt"` and `"writes"`. With a noninteractive `never` approval
-policy, a tool that still requires approval is blocked; Bridge does not provide an
-approval conversation. Choose the sender permission as part of operator setup.
+policy, a tool that still requires approval is blocked. Choose the sender
+permission and native approval policy as part of operator setup.
+
+For example, an operator who wants the normal workspace sandbox with human
+approvals can select the following private preset:
+
+```json
+{
+  "transport": "app-server",
+  "executable": "/absolute/path/to/codex",
+  "args": ["-c", "approval_policy=\"on-request\"", "-c", "approvals_reviewer=\"user\""],
+  "cwd": "/absolute/path/to/project"
+}
+```
+
+These are the fields inside `codex`, not the complete Bridge configuration.
+No new login or alternate home is required. Native model and tool settings come
+from the normal Codex configuration and explicit operator arguments. Approval
+policy, reviewer and an explicitly configured sandbox mode are applied when
+resuming older sessions, so an old `exec` turn does not keep a stale policy.
+
+Native prompts appear in the originating Slack thread. For one pending prompt,
+reply `approve`, `deny`, an option number, or the requested answer. When several
+prompts are waiting, use `approve PROMPT_ID`, `deny PROMPT_ID`, or
+`answer PROMPT_ID your answer`. Only the requester or a configured operator may
+answer; a different thread, expired prompt or duplicate response grants nothing.
+Ordinary follow-ups continue the saved Codex conversation after a turn finishes.
+With several pending prompts, include the ID rather than queuing an ambiguous
+answer. Approval responses accept only the displayed native request, with no
+automatic session-wide rules; permission-profile grants are scoped to this turn.
+MCP form elicitations accept a JSON object validated against the server's schema.
+
+`status` shows a turn waiting for input. `cancel`, a deadline or shutdown clears
+the pending prompts and stops the CLI. Restart interrupts work and never replays
+old approvals. Native secret-input requests require direct CLI interaction;
+Bridge does not ask for credentials in Slack. Unsupported native client requests
+fail visibly rather than being accepted. Account login remains in the normal
+harness. Desktop-only interfaces are not provided by this CLI integration.
 
 The MCP name `techbase_bridge` is reserved. Doctor rejects an existing entry of
 that name instead of overwriting it. Other existing MCP entries are preserved.
@@ -116,7 +154,7 @@ edits Codex session files or chooses the global last session.
 | `maxPending` | 20 | Queued plus active requests; one CLI turn at a time |
 | `maxInputChars` | 12,000 | Incoming prompt limit in UTF-16 units |
 | `maxOutputChars` | 24,000 | Final fallback budget; total tool text budget per turn |
-| `turnTimeoutMs` | 300,000 | CLI turn deadline; cleanup waits for process/send settlement |
+| `turnTimeoutMs` | 300,000 | CLI turn deadline, including waiting for human input; `0` disables it explicitly |
 | `queueTtlMs` | 900,000 | Maximum wait before queued work expires |
 | `retentionMs` | 604,800,000 | Metadata/session/dedup retention (maximum 30 days) |
 | `maxRetainedEvents` | 10,000 | Admission stops at dedup capacity |

@@ -3,6 +3,8 @@ import type { Config } from './config.js';
 import { sendText, type SlackSender } from './output.js';
 import { Store, type Job, type Scope } from './store.js';
 import { TurnSender } from './send.js';
+import { randomBytes } from 'node:crypto';
+import type { Interaction } from './interaction.js';
 
 export interface Clock {
   now(): number;
@@ -43,7 +45,7 @@ export function route(config: Config, value: unknown, now: number): Routed | und
     project: config.codex.cwd, user: event.user, eventId: body.event_id, prompt, hasFiles };
 }
 
-const HELP = 'Send a message to start or continue a Codex CLI conversation in this thread (mention Bridge if mention-only mode is configured). Codex uses the operator’s existing permissions and preset. Use help, status, or cancel. Only the requester or a configured operator may cancel a request.';
+const HELP = 'Send a message to start or continue a Codex CLI conversation in this thread (mention Bridge if mention-only mode is configured). Codex uses the operator’s existing permissions and preset. Use help, status, or cancel. In app-server mode, reply to native prompts with approve ID, deny ID, or answer ID your answer. Only the requester or a configured operator may answer prompts or cancel a request.';
 
 export class Bridge {
   private closing = false;
@@ -52,6 +54,7 @@ export class Bridge {
   private background = new Set<Promise<void>>();
   private stopMaintenance?: () => void;
   private shutdownTask?: Promise<void>;
+  private interactions = new Map<string, { job: Job; prompt: Interaction; signal: AbortSignal; resolve(value: unknown): void }>();
 
   constructor(
     private config: Config,
@@ -88,6 +91,15 @@ export class Bridge {
     if (command === 'help' || command === '') { await this.reply(routed, HELP); return; }
     if (command === 'status') { await this.reply(routed, this.status(routed)); return; }
     if (command === 'cancel') { await this.cancel(routed); return; }
+    if (/^(approve|deny|answer)\s+[a-f0-9]{24}(\s|$)/i.test(routed.prompt)) { await this.answerInteraction(routed); return; }
+    const prompts = [...this.interactions.entries()].filter(([, p]) => !p.signal.aborted && p.job.team === routed.team
+      && p.job.channel === routed.channel && p.job.root === routed.root && p.job.project === routed.project);
+    if (prompts.length === 1) {
+      const action = command === 'approve' || command === 'deny' ? command : 'answer';
+      await this.answerInteraction({ ...routed, prompt: `${action} ${prompts[0]![0]}${action === 'answer' ? ' ' + routed.prompt : ''}` });
+      return;
+    }
+    if (prompts.length > 1) { await this.reply(routed, 'Several native prompts are waiting in this thread. Include the prompt ID in your response.'); return; }
     if (routed.prompt.length > this.config.maxInputChars) {
       await this.reply(routed, `Request too long. Limit: ${this.config.maxInputChars} characters. Nothing was queued.`);
       return;
@@ -116,7 +128,45 @@ export class Bridge {
     const delivery = job.delivery === 'uncertain' ? ' Slack outcome delivery is uncertain; the turn will not be replayed. Ask again explicitly if needed.'
       : job.delivery === 'sent' ? ' Outcome delivered.' : '';
     const recovery = job.state === 'interrupted' ? ' Interrupted requests are never replayed automatically.' : '';
-    return `Request ${job.id}: ${job.state}.${delivery}${recovery}${pending.length > 1 ? ` ${pending.length} requests remain in this thread.` : ''}`;
+    const waiting = [...this.interactions.entries()].filter(([, p]) => p.job.id === job.id && !p.signal.aborted).map(([id]) => id);
+    return `Request ${job.id}: ${job.state}.${waiting.length ? ` Waiting for your response to prompt(s): ${waiting.join(', ')}.` : ''}${delivery}${recovery}${pending.length > 1 ? ` ${pending.length} requests remain in this thread.` : ''}`;
+  }
+
+  private async answerInteraction(scope: Routed): Promise<void> {
+    const match = /^(approve|deny|answer)\s+([a-f0-9]{24})(?:\s+([\s\S]*))?$/i.exec(scope.prompt);
+    const pending = match && this.interactions.get(match[2]!.toLowerCase());
+    if (!pending || pending.signal.aborted || pending.job.team !== scope.team || pending.job.channel !== scope.channel
+        || pending.job.root !== scope.root || pending.job.project !== scope.project) {
+      await this.reply(scope, 'No matching live prompt in this thread. Nothing was approved or queued. Use status to check the request.'); return;
+    }
+    if (scope.user !== pending.job.user && !this.config.operatorUserIds.includes(scope.user)) {
+      await this.reply(scope, 'Only the requester or a configured operator may answer this prompt.'); return;
+    }
+    if ((match![1]!.toLowerCase() !== 'answer' && match![3]?.trim()) || scope.prompt.length > this.config.maxInputChars) {
+      await this.reply(scope, 'Invalid prompt response. ' + pending.prompt.instructions.replaceAll(/\bID\b/g, match![2]!)); return;
+    }
+    const answer = pending.prompt.parse(match![1]!.toLowerCase() as 'approve' | 'deny' | 'answer', match![3] ?? '');
+    if (answer === undefined) {
+      await this.reply(scope, 'Invalid prompt response. ' + pending.prompt.instructions.replaceAll(/\bID\b/g, match![2]!)); return;
+    }
+    // Consume before awaiting Slack. Duplicate or concurrent events cannot approve twice.
+    this.interactions.delete(match![2]!);
+    pending.resolve(answer);
+    await this.reply(scope, `Response submitted to Codex for prompt ${match![2]}. Use status to check the turn.`);
+  }
+
+  private interaction(job: Job, prompt: Interaction, signal: AbortSignal): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      if (signal.aborted || this.closing) { reject(new ModelFailure('model_failed')); return; }
+      const id = randomBytes(12).toString('hex');
+      const clear = () => { signal.removeEventListener('abort', abort); this.interactions.delete(id); };
+      const abort = () => { clear(); reject(new ModelFailure('model_failed')); };
+      this.interactions.set(id, { job, prompt, signal, resolve: answer => { clear(); resolve(answer); } });
+      signal.addEventListener('abort', abort, { once: true });
+      this.track(this.reply(job, `${prompt.text}\n\n${prompt.instructions.replaceAll(/\bID\b/g, id)}\nPrompt: ${id}`, job.id).then(sent => {
+        if (!sent && this.interactions.has(id)) { this.store.delivery(job.id, 'uncertain'); clear(); reject(new ModelFailure('interaction_required')); }
+      }).catch(() => { clear(); reject(new ModelFailure('model_failed')); }));
+    });
   }
 
   private async cancel(scope: Routed): Promise<void> {
@@ -173,14 +223,16 @@ export class Bridge {
 
   private async execute(active: { job: Job; controller: AbortController; reason?: 'cancelled' | 'timed_out' | 'interrupted' }): Promise<void> {
     const { job, controller } = active;
-    const stopTimeout = this.clock.timer(() => { active.reason ??= 'timed_out'; controller.abort(); }, this.config.turnTimeoutMs);
+    const stopTimeout = this.config.turnTimeoutMs === 0 ? () => {}
+      : this.clock.timer(() => { active.reason ??= 'timed_out'; controller.abort(); }, this.config.turnTimeoutMs);
     let answer = '';
     let failure: string | undefined;
     const turnSender = new TurnSender(this.config, job, this.store, this.sender, this.secrets, controller.signal);
     try {
       this.store.touchThread(job, this.clock.now());
       answer = await this.model.run({ project: job.project, prompt: job.prompt!, threadId: this.store.thread(job), signal: controller.signal,
-        onThread: id => this.store.saveThread(job, id, this.clock.now()), sendMessage: turnSender.send });
+        onThread: id => this.store.saveThread(job, id, this.clock.now()), sendMessage: turnSender.send,
+        interact: (prompt, signal) => this.interaction(job, prompt, signal) });
       if (!turnSender.attempted && (typeof answer !== 'string' || !answer.trim())) failure = 'invalid_result';
     } catch (error) {
       failure = error instanceof ModelFailure ? error.reason : 'model_failed';

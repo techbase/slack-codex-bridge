@@ -13,7 +13,7 @@ export interface Config {
   incomingChannelIds: string[];
   outgoingChannels: Record<string, string>;
   mentionOnly: boolean;
-  codex: { executable: string; args: string[]; cwd: string; sendToolApprovalMode?: SendToolApprovalMode };
+  codex: { executable: string; args: string[]; cwd: string; transport?: 'exec' | 'app-server'; sendToolApprovalMode?: SendToolApprovalMode };
   stateDir: string;
   maxPending: number;
   maxInputChars: number;
@@ -101,8 +101,9 @@ export function parseConfig(input: unknown): Config {
     outgoingChannels[alias] = channel;
   }
   if (raw.mentionOnly !== undefined && typeof raw.mentionOnly !== 'boolean') throw new SetupError('mentionOnly must be boolean.');
-  if (!object(raw.codex) || Object.keys(raw.codex).some(key => !['executable', 'args', 'cwd', 'sendToolApprovalMode'].includes(key))) throw new SetupError('codex must define executable, args and cwd.');
-  const { executable, cwd, sendToolApprovalMode } = raw.codex;
+  if (!object(raw.codex) || Object.keys(raw.codex).some(key => !['executable', 'args', 'cwd', 'transport', 'sendToolApprovalMode'].includes(key))) throw new SetupError('codex must define executable, args and cwd.');
+  const { executable, cwd, transport, sendToolApprovalMode } = raw.codex;
+  if (transport !== undefined && transport !== 'exec' && transport !== 'app-server') throw new SetupError('codex.transport must be exec or app-server.');
   if (sendToolApprovalMode !== undefined && sendToolApprovalMode !== 'auto' && sendToolApprovalMode !== 'prompt'
       && sendToolApprovalMode !== 'writes' && sendToolApprovalMode !== 'approve') {
     throw new SetupError('codex.sendToolApprovalMode must be auto, prompt, writes or approve when configured.');
@@ -115,18 +116,20 @@ export function parseConfig(input: unknown): Config {
   try { real = realpathSync(cwd); if (!statSync(real).isDirectory()) throw new Error(); }
   catch { throw new SetupError('codex.cwd is not an accessible directory.'); }
   const codex: Config['codex'] = { executable, args: validateArgs(raw.codex.args ?? []), cwd: real,
+    ...(transport === undefined ? {} : { transport }),
     ...(sendToolApprovalMode === undefined ? {} : { sendToolApprovalMode }) };
   const stateDir = privateDirectory(raw.stateDir, 'stateDir');
   const limits = { ...defaults };
   const bounds: Record<keyof typeof defaults, [number, number]> = {
     maxPending: [1, 1000], maxInputChars: [1, 40_000], maxOutputChars: [100, 48_000],
-    turnTimeoutMs: [1000, 1_800_000], queueTtlMs: [1000, 86_400_000],
+    turnTimeoutMs: [0, 1_800_000], queueTtlMs: [1000, 86_400_000],
     retentionMs: [60_000, 30 * 86_400_000], maxRetainedEvents: [10, 100_000],
   };
   for (const key of Object.keys(defaults) as (keyof typeof defaults)[]) {
     const value = raw[key] ?? defaults[key];
     const [min, max] = bounds[key];
-    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < min || value > max) throw new SetupError(`Invalid ${key} limit.`);
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < min || value > max
+        || (key === 'turnTimeoutMs' && value > 0 && value < 1000)) throw new SetupError(`Invalid ${key} limit.`);
     limits[key] = value;
   }
   if (limits.retentionMs < limits.queueTtlMs) throw new SetupError('retentionMs must be at least queueTtlMs.');

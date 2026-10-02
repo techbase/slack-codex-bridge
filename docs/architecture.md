@@ -1,5 +1,18 @@
 # Architecture
 
+Codex transport is selected in private configuration. The compatible `exec`
+adapter consumes JSONL events; `app-server` uses Codex's native bidirectional
+stdio API for thread start/resume, turns, approvals, questions and MCP elicitations.
+Both use the configured executable, cwd and normal account environment, add only
+the turn-local Slack sender, preserve existing tools, and save explicit Codex
+session IDs. They introduce no project orchestration API.
+
+For native prompts, Bridge transports an opaque harness-owned parser/result.
+The harness adapter determines the response shape; Bridge checks the Slack
+requester/operator and conversation scope. Replies resolve pending prompts rather
+than starting new turns. Prompt IDs are ephemeral, single-use and cancelled with
+their native request or turn. Existing SQLite job/session state remains unchanged.
+
 ```text
 Slack Socket Mode (official Bolt)
   -> authorize ordinary message -> dedup / bounded SQLite queue
