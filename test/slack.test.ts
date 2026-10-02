@@ -30,7 +30,7 @@ test('real Bolt event boundary and WebClient accept ordinary human messages, one
   let acknowledgements = 0;
   await app.processEvent({ body: message('real-bolt'), ack: async () => { acknowledgements++; } });
   const call = await model.started(1);
-  call.result.resolve('Answer with <!channel> and a file src/example.ts.');
+  call.result.resolve('*Answer*\n\n<https://example.invalid|Visit site>\nhttps://example.invalid/status\n<!channel> and a file src/example.ts.');
   await bridge.idle();
   assert.equal(acknowledgements, 1);
   const posts = calls.filter(call => call.url.endsWith('/chat.postMessage'));
@@ -39,13 +39,15 @@ test('real Bolt event boundary and WebClient accept ordinary human messages, one
     const body = new URLSearchParams(post.body);
     assert.equal(body.get('channel'), 'CPROJECT');
     assert.equal(body.get('thread_ts'), '1800000000.000001');
-    assert.equal(body.get('parse'), 'none');
-    assert.equal(body.get('mrkdwn'), 'false');
+    assert.equal(body.has('parse'), false);
+    assert.equal(body.get('mrkdwn'), 'true');
     assert.equal(body.get('unfurl_links'), 'false');
     assert.equal(body.get('unfurl_media'), 'false');
     assert.equal(body.get('link_names'), 'false');
   }
   assert.match(new URLSearchParams(posts[1]!.body).get('text')!, /&lt;!channel&gt;/);
+  assert.match(new URLSearchParams(posts[1]!.body).get('text')!, /\*Answer\*/);
+  assert.match(new URLSearchParams(posts[1]!.body).get('text')!, /<https:\/\/example\.invalid\|Visit site>/);
   const previous = calls.filter(call => call.url.endsWith('/chat.postMessage')).length;
   await app.processEvent({ body: message('unauthorized', 'Question', { user: 'UEVE' }), ack: async () => {} });
   assert.equal(calls.filter(call => call.url.endsWith('/chat.postMessage')).length, previous);
@@ -65,7 +67,7 @@ test('Slack identity mismatch and ambiguous send failure are not silently accept
   } } });
   await app.init();
   await assert.rejects(verifySlackIdentity(app, config), /does not match/);
-  await assert.rejects(slackSender(app).post({ channel: 'CPROJECT', thread_ts: '1800000000.000001', text: 'Fixture', mrkdwn: false, parse: 'none', link_names: false, unfurl_links: false, unfurl_media: false }));
+  await assert.rejects(slackSender(app).post({ channel: 'CPROJECT', thread_ts: '1800000000.000001', text: 'Fixture', mrkdwn: true, link_names: false, unfurl_links: false, unfurl_media: false }));
   assert.equal(requests, 2);
   const logger = safeLogger(reason => reasons.push(reason));
   logger.error('PRIVATE', { token: 'secret' }); logger.warn('PRIVATE'); logger.debug('PRIVATE');

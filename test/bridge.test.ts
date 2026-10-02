@@ -62,7 +62,7 @@ test('ordinary message routing fixes project and thread; help/status are determi
   assert.equal(store.latest(scope)?.prompt, null);
   for (const post of slack.posts) {
     assert.equal(post.channel, scope.channel); assert.equal(post.thread_ts, scope.root);
-    assert.equal(post.parse, 'none'); assert.equal(post.mrkdwn, false); assert.equal(post.unfurl_links, false); assert.equal(post.link_names, false);
+    assert.equal(Object.hasOwn(post, 'parse'), false); assert.equal(post.mrkdwn, true); assert.equal(post.unfurl_links, false); assert.equal(post.link_names, false);
   }
 });
 

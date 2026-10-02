@@ -4,7 +4,7 @@ import { z } from 'zod';
 
 const server = new McpServer({ name: 'techbase-bridge', version: '0.2.0' });
 server.registerTool('send_message', {
-  description: 'Send plain text to Slack. Omit destination (or use thread) to reply in the originating thread, or use an operator-configured alias from the request context. Never retry an uncertain delivery. After any tool send, Bridge suppresses its automatic final answer.',
+  description: 'Send Slack mrkdwn text: *bold* headings, blank lines, short bullets and <https://example.com|label> web links. Bare HTTP/HTTPS URLs also link automatically. Mentions and link previews are disabled. Omit destination (or use thread) to reply in the originating thread, or use an operator-configured alias from the request context. Never retry an uncertain delivery. After any tool send, Bridge suppresses its automatic final answer.',
   inputSchema: z.object({ text: z.string().min(1).max(48_000), destination: z.string().max(40).optional() }).strict(),
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
 }, async input => {
