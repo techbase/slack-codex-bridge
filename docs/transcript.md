@@ -12,13 +12,11 @@ Bridge: Send a message to start or continue a Codex CLI conversation in this thr
         Only the requester or a configured operator may cancel a request.
 
 Alice:  Explain how imports are validated in this project.
-Bridge: Queued request A. Codex will reply here or use a configured outgoing destination.
 Bridge: Completed request A.
         Imports validate required fields in src/import.ts. I inspected the code;
         I have not checked a live upstream payload.
 
 Alice:  Send that summary to the updates channel too.
-Bridge: Queued request B. Codex will reply here or use a configured outgoing destination.
         [Codex calls send_message with destination="updates".]
         [The summary appears in the predefined updates channel. No duplicate
          automatic final answer is posted in this thread.]
@@ -27,7 +25,6 @@ Alice:  status
 Bridge: Request B: completed. Outcome delivered.
 
 Alice:  Check the slow validation path next.
-Bridge: Queued request C. Codex will reply here or use a configured outgoing destination.
 Alice:  cancel
 Bridge: Cancellation requested for 1 request(s). Active turns must stop before
         the next turn starts.

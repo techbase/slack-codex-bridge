@@ -6,7 +6,7 @@ import { Store } from '../src/store.js';
 import { appOptions, safeLogger, slackSender, verifySlackIdentity, wireSlack } from '../src/slack.js';
 import { ControlledModel, fixture, ManualClock, message, NOW } from './helpers.js';
 
-test('real Bolt event boundary and WebClient accept ordinary human messages, one ack, thread-only safe output and no HTTP receiver', async t => {
+test('real Bolt event boundary acknowledges the protocol without a queue reply; WebClient sends thread-only safe output with no HTTP receiver', async t => {
   const { config } = fixture(t);
   const store = new Store(config, NOW);
   const logs: string[] = [];
@@ -30,11 +30,12 @@ test('real Bolt event boundary and WebClient accept ordinary human messages, one
   let acknowledgements = 0;
   await app.processEvent({ body: message('real-bolt'), ack: async () => { acknowledgements++; } });
   const call = await model.started(1);
+  assert.equal(calls.filter(call => call.url.endsWith('/chat.postMessage')).length, 0);
   call.result.resolve('*Answer*\n\n<https://example.invalid|Visit site>\nhttps://example.invalid/status\n<!channel> and a file src/example.ts.');
   await bridge.idle();
   assert.equal(acknowledgements, 1);
   const posts = calls.filter(call => call.url.endsWith('/chat.postMessage'));
-  assert.equal(posts.length, 2);
+  assert.equal(posts.length, 1);
   for (const post of posts) {
     const body = new URLSearchParams(post.body);
     assert.equal(body.get('channel'), 'CPROJECT');
@@ -45,9 +46,9 @@ test('real Bolt event boundary and WebClient accept ordinary human messages, one
     assert.equal(body.get('unfurl_media'), 'false');
     assert.equal(body.get('link_names'), 'false');
   }
-  assert.match(new URLSearchParams(posts[1]!.body).get('text')!, /&lt;!channel&gt;/);
-  assert.match(new URLSearchParams(posts[1]!.body).get('text')!, /\*Answer\*/);
-  assert.match(new URLSearchParams(posts[1]!.body).get('text')!, /<https:\/\/example\.invalid\|Visit site>/);
+  assert.match(new URLSearchParams(posts[0]!.body).get('text')!, /&lt;!channel&gt;/);
+  assert.match(new URLSearchParams(posts[0]!.body).get('text')!, /\*Answer\*/);
+  assert.match(new URLSearchParams(posts[0]!.body).get('text')!, /<https:\/\/example\.invalid\|Visit site>/);
   await app.processEvent({ body: message('real-bolt-file-reply', 'Follow up on this issue', {
     subtype: 'file_share', files: [{ id: 'FFICTURE', url_private: 'https://files.example.invalid/screenshot.png' }],
     ts: '1800000000.000002', thread_ts: '1800000000.000001',
@@ -59,7 +60,7 @@ test('real Bolt event boundary and WebClient accept ordinary human messages, one
   assert.match(new URLSearchParams(calls.at(-1)!.body).get('text')!, /Attachments.*text only/);
   followup.result.resolve('Follow-up answered.'); await bridge.idle();
   assert.equal(acknowledgements, 2);
-  assert.equal(calls.filter(call => call.url.endsWith('/chat.postMessage')).length, 4);
+  assert.equal(calls.filter(call => call.url.endsWith('/chat.postMessage')).length, 3);
   assert.ok(calls.every(call => /\/(auth.test|chat.postMessage)$/.test(call.url)));
   const previous = calls.filter(call => call.url.endsWith('/chat.postMessage')).length;
   await app.processEvent({ body: message('unauthorized', 'Question', { user: 'UEVE' }), ack: async () => {} });

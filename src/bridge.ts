@@ -106,9 +106,10 @@ export class Bridge {
     }
     const job = this.store.enqueue(routed, routed.eventId, routed.user, routed.prompt, this.clock.now());
     if (!job) { await this.reply(routed, 'Bridge is busy; the queue is full. Nothing was queued. Please ask again later.'); return; }
-    const attachmentNotice = routed.hasFiles ? '\n\nAttachments were not sent to Codex; this request contains text only.' : '';
-    const sent = await this.reply(job, `Queued request ${job.id}. Codex will reply here or use a configured outgoing destination.${attachmentNotice}`);
-    this.store.acknowledge(job.id, sent ? 'sent' : 'uncertain');
+    const sent = routed.hasFiles
+      ? await this.reply(job, 'Attachments were not sent to Codex; this request contains text only.')
+      : true;
+    this.store.acknowledge(job.id, routed.hasFiles ? (sent ? 'sent' : 'uncertain') : 'skipped');
     if (!sent) {
       // A concurrent cancel command may already have terminated the queued job.
       if (this.store.job(job.id)?.state === 'queued') {
@@ -196,16 +197,16 @@ export class Bridge {
 
   private pump(): void {
     if (this.closing) return;
-    const awaitingAcknowledgement = new Set<string>();
+    const awaitingNotice = new Set<string>();
     for (const job of this.store.queued()) {
       if (this.clock.now() - job.created >= this.config.queueTtlMs) {
         this.store.finish(job.id, 'interrupted', 'queue_expired', this.clock.now());
         this.track(this.deliver(job, 'Request expired while queued. Nothing ran; send another message to ask.'));
         continue;
       }
-      // Preserve arrival order within a project while Slack acknowledges it.
-      if (job.ack !== 'sent') awaitingAcknowledgement.add(job.project);
-      if (awaitingAcknowledgement.has(job.project)) continue;
+      // Preserve arrival order while an attachment notice is being delivered.
+      if (job.ack !== 'sent' && job.ack !== 'skipped') awaitingNotice.add(job.project);
+      if (awaitingNotice.has(job.project)) continue;
       if (this.active.has(job.project) || this.active.size >= 1) continue;
       this.store.activate(job.id, this.clock.now());
       const active = { job, controller: new AbortController(), done: Promise.resolve() } as { job: Job; controller: AbortController; done: Promise<void>; reason?: 'cancelled' | 'timed_out' | 'interrupted' };

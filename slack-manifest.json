@@ -5,7 +5,7 @@
     "background_color": "#243746"
   },
   "features": {
-    "bot_user": { "display_name": "Bridge", "always_online": false }
+    "bot_user": { "display_name": "Bridge", "always_online": true }
   },
   "oauth_config": {
     "scopes": { "bot": ["channels:history", "groups:history", "chat:write"] }

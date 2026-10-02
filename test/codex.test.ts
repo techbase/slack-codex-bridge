@@ -122,8 +122,8 @@ test('actual fake CLI invokes registered MCP stdio sender and Bridge suppresses 
   t.after(async () => { await bridge.shutdown(); store.close(); });
   await bridge.accept(message('tool-e2e', 'tool'));
   await bridge.idle();
-  assert.equal(slack.posts.length, 2);
-  assert.equal(slack.posts[1]?.text, 'Answer sent through the real MCP round trip.');
+  assert.equal(slack.posts.length, 1);
+  assert.equal(slack.posts[0]?.text, 'Answer sent through the real MCP round trip.');
   assert.doesNotMatch(JSON.stringify(slack.posts), /Only the final answer/);
   assert.equal(JSON.parse(readFileSync(path.join(root, 'tool-result.json'), 'utf8')).isError, false);
   assert.equal(store.latest({ team: config.teamId, channel: 'CPROJECT', root: '1800000000.000001', project: config.codex.cwd })?.state, 'completed');

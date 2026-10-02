@@ -71,9 +71,11 @@ test('duplicate events never queue or reply twice; follow-ups resume and new thr
   const original = message('original');
   await bridge.accept(original);
   await bridge.accept(original);
-  assert.equal(slack.posts.length, 1);
+  assert.equal(slack.posts.length, 0);
   const first = await model.started(1);
   first.result.resolve('First.'); await bridge.idle();
+  assert.equal(slack.posts.length, 1);
+  assert.match(slack.posts[0]!.text, /First\./);
   await bridge.accept(original);
   assert.equal(model.calls.length, 1);
   await bridge.accept(message('followup', 'Correction', { ts: '1800000000.000002', thread_ts: '1800000000.000001' }));
@@ -101,7 +103,7 @@ test('messages with files queue their text once and thread follow-ups resume the
   assert.equal(model.calls.length, 1);
   assert.equal(model.calls[0]!.request.prompt, 'Explain this issue');
   assert.equal(model.calls[0]!.request.threadId, undefined);
-  assert.match(slack.posts[0]!.text, /Queued request.*\n\n.*Attachments.*text only/s);
+  assert.match(slack.posts[0]!.text, /^Attachments.*text only/);
   model.calls[0]!.result.resolve('Please describe the screenshot.'); await bridge.idle();
   await bridge.accept(original);
   assert.equal(slack.posts.length, 2);
@@ -238,13 +240,13 @@ test('model success with Slack delivery failure stays completed across duplicate
   const { bridge, model, store, config, scope, slack, logs } = setup(t);
   const event = message('completed');
   await bridge.accept(event);
-  slack.failOn = 2;
+  slack.failOn = 1;
   model.calls[0]!.result.resolve('The answer contains fixture-secret and <!channel> <@UALICE>.');
   await bridge.idle();
   assert.equal(store.latest(scope)?.state, 'completed');
   assert.equal(store.latest(scope)?.delivery, 'uncertain');
-  assert.match(slack.posts[1]!.text, /\[redacted\]/);
-  assert.doesNotMatch(slack.posts[1]!.text, /fixture-secret|<!channel>|<@UALICE>/);
+  assert.match(slack.posts[0]!.text, /\[redacted\]/);
+  assert.doesNotMatch(slack.posts[0]!.text, /fixture-secret|<!channel>|<@UALICE>/);
   await bridge.accept(event);
   await bridge.accept(message('status', 'status'));
   assert.match(slack.posts.at(-1)!.text, /completed.*uncertain/);
@@ -263,22 +265,22 @@ test('a long answer stops at an uncertain chunk and a duplicate event never rese
   const { bridge, model, store, scope, slack } = setup(t);
   const event = message('long-answer');
   await bridge.accept(event);
-  slack.failOn = 3; // Acknowledgement, delivered first chunk, uncertain second chunk.
+  slack.failOn = 2; // Delivered first chunk, uncertain second chunk.
   model.calls[0]!.result.resolve('x'.repeat(12_000));
   await bridge.idle();
-  assert.equal(slack.posts.length, 3);
+  assert.equal(slack.posts.length, 2);
   assert.ok(slack.posts.every(post => post.text.length <= 3000));
   assert.equal(store.latest(scope)?.state, 'completed');
   assert.equal(store.latest(scope)?.delivery, 'uncertain');
   await bridge.accept(event);
-  assert.equal(slack.posts.length, 3);
+  assert.equal(slack.posts.length, 2);
   assert.equal(model.calls.length, 1);
 });
 
-test('uncertain acknowledgement fails closed without launching a model; raw provider failures stay local-safe', async t => {
+test('uncertain attachment notice fails closed without launching a model; raw provider failures stay local-safe', async t => {
   const { bridge, model, slack, store, scope, logs } = setup(t);
   slack.failOn = 1;
-  await bridge.accept(message('ack-fails'));
+  await bridge.accept(message('notice-fails', 'Explain this issue', { files: [{ id: 'FFIXTURE' }] }));
   assert.equal(model.calls.length, 0);
   assert.equal(store.latest(scope)?.state, 'interrupted');
   await bridge.accept(message('model-fails'));
@@ -310,16 +312,16 @@ test('cancel waits for model settlement before reusing a project, even if the mo
   assert.equal(started.length, 2);
 });
 
-test('acknowledgement failure after queued cancellation preserves cancellation and its delivered outcome', async t => {
+test('attachment notice failure after queued cancellation preserves cancellation and its delivered outcome', async t => {
   const { bridge, slack, store, model, scope } = setup(t);
-  const ack = deferred();
+  const notice = deferred();
   slack.post = async message => {
     slack.posts.push(message);
-    if (message.text.startsWith('Queued')) { await ack.promise; throw new Error('uncertain ack'); }
+    if (message.text.startsWith('Attachments')) { await notice.promise; throw new Error('uncertain notice'); }
   };
-  const question = bridge.accept(message('queued'));
+  const question = bridge.accept(message('queued', 'Explain this issue', { files: [{ id: 'FFIXTURE' }] }));
   await bridge.accept(message('cancel', 'cancel'));
-  ack.resolve(); await question;
+  notice.resolve(); await question;
   assert.equal(model.calls.length, 0);
   assert.equal(store.latest(scope)?.state, 'cancelled');
   assert.equal(store.latest(scope)?.ack, 'uncertain');
@@ -348,17 +350,17 @@ test('an active cancellation send failure stays uncertain even when the cancel c
   assert.equal(store.latest(scope)?.delivery, 'uncertain');
 });
 
-test('a slow acknowledgement cannot reorder queued questions for the same project', async t => {
+test('a slow attachment notice cannot reorder queued questions for the same project', async t => {
   const { bridge, slack, model } = setup(t);
-  const firstAck = deferred();
+  const firstNotice = deferred();
   slack.post = async message => {
     slack.posts.push(message);
-    if (slack.posts.length === 1) await firstAck.promise;
+    if (slack.posts.length === 1) await firstNotice.promise;
   };
-  const first = bridge.accept(message('first', 'First question'));
+  const first = bridge.accept(message('first', 'First question', { files: [{ id: 'FFIXTURE' }] }));
   await bridge.accept(message('followup', 'Second question'));
   assert.equal(model.calls.length, 0);
-  firstAck.resolve(); await first;
+  firstNotice.resolve(); await first;
   const call = await model.started(1);
   assert.equal(call.request.prompt, 'First question');
   call.result.resolve('First answer.');
@@ -408,7 +410,7 @@ test('tool sends suppress duplicate answers, but a later CLI failure gets a term
     const { bridge, model, store, scope, slack } = setup(t);
     const event = message('tool-' + uncertain);
     await bridge.accept(event);
-    if (uncertain) slack.failOn = 2;
+    if (uncertain) slack.failOn = 1;
     const call = await model.started(1);
     const sent = await call.request.sendMessage({ text: 'Tool answer' });
     assert.equal(sent.ok, !uncertain);
@@ -417,14 +419,14 @@ test('tool sends suppress duplicate answers, but a later CLI failure gets a term
       call.result.resolve('Do not duplicate final');
     } else call.result.reject(new Error('PRIVATE provider error after tool success'));
     await bridge.idle();
-    assert.equal(slack.posts.length, uncertain ? 2 : 3);
+    assert.equal(slack.posts.length, uncertain ? 1 : 2);
     if (!uncertain) assert.match(slack.posts.at(-1)!.text, /failed.*Codex did not finish/s);
     assert.equal(slack.posts.filter(post => post.text === 'Tool answer').length, 1);
     assert.doesNotMatch(JSON.stringify(slack.posts), /Do not duplicate final|PRIVATE provider error/);
     assert.equal(store.latest(scope)?.state, uncertain ? 'completed' : 'failed');
     assert.equal(store.latest(scope)?.delivery, uncertain ? 'uncertain' : 'sent');
     await bridge.accept(event);
-    assert.equal(slack.posts.length, uncertain ? 2 : 3);
+    assert.equal(slack.posts.length, uncertain ? 1 : 2);
     assert.equal(model.calls.length, 1);
   }
 });
@@ -448,11 +450,11 @@ test('timeout, cancellation and shutdown remain visible after an earlier progres
 test('a failure notice never retries an uncertain tool send or erases its delivery uncertainty', async t => {
   const { bridge, model, slack, store, scope } = setup(t);
   await bridge.accept(message('uncertain-then-failed'));
-  slack.failOn = 2;
+  slack.failOn = 1;
   assert.equal((await model.calls[0]!.request.sendMessage({ text: 'Uncertain progress.' })).ok, false);
   model.calls[0]!.result.reject(new Error('PRIVATE provider error'));
   await bridge.idle();
-  assert.equal(slack.posts.length, 3);
+  assert.equal(slack.posts.length, 2);
   assert.match(slack.posts.at(-1)!.text, /failed/);
   assert.equal(store.latest(scope)?.state, 'failed');
   assert.equal(store.latest(scope)?.delivery, 'uncertain');
