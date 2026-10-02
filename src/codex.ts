@@ -130,7 +130,7 @@ export class CodexModel implements Model {
       const args = [...this.config.codex.args, ...mcpOverrides(this.config.codex.sendToolApprovalMode), 'exec', '--json'];
       if (request.threadId) args.push('resume', request.threadId);
       args.push('-');
-      const context = `This request arrived through Slack Bridge. Use the ${MCP_NAME} MCP send_message tool to send plain text. Destination defaults to the originating thread (thread); configured channel aliases: ${Object.keys(this.config.outgoingChannels).join(', ') || '(none)'}. After any tool send, Bridge does not repeat your final answer. If you do not send through the tool, Bridge posts your final answer in the originating thread. Never retry an uncertain delivery.\n\nSlack message:\n`;
+      const context = `This request arrived through Slack Bridge. Use the ${MCP_NAME} MCP send_message tool for replies. Format tool messages and final answers using Slack mrkdwn: *bold* for short headings and key names, blank lines between sections, and short bullet lists. Use <https://example.com|descriptive label> for web links, or bare HTTP/HTTPS URLs. Do not use Markdown heading hashes, **bold**, Markdown links, tables or escaped line breaks. Mentions and link previews are disabled. Destination defaults to the originating thread (thread); configured channel aliases: ${Object.keys(this.config.outgoingChannels).join(', ') || '(none)'}. After any tool send, Bridge does not repeat your final answer. If you do not send through the tool, Bridge posts your final answer in the originating thread. Never retry an uncertain delivery.\n\nSlack message:\n`;
       let started = false;
       let completed = false;
       let final = '';

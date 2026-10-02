@@ -26,12 +26,16 @@ test('actual MCP stdio client/server round trip enforces default thread, aliases
     assert.equal((await call(args)).isError, true);
     assert.equal(slack.posts.length, 0);
   }
-  const first = await call({ text: 'Hello <!channel> <@UALICE> fixture-secret https://example.invalid' });
+  const first = await call({ text: '*Hello* <!channel> <@UALICE> fixture-secret <https://example.invalid|Visit site>' });
   assert.equal(first.isError, false);
   assert.equal(slack.posts[0]?.channel, 'CPROJECT');
   assert.equal(slack.posts[0]?.thread_ts, scope.root);
   assert.match(slack.posts[0]!.text, /&lt;!channel&gt;/);
   assert.match(slack.posts[0]!.text, /\[redacted\]/);
+  assert.match(slack.posts[0]!.text, /\*Hello\*/);
+  assert.match(slack.posts[0]!.text, /<https:\/\/example\.invalid\|Visit site>/);
+  assert.equal(slack.posts[0]?.mrkdwn, true);
+  assert.equal(slack.posts[0]?.link_names, false);
   assert.equal(slack.posts[0]?.unfurl_links, false);
   assert.equal((await call({ text: 'News', destination: 'updates' })).isError, false);
   assert.equal(slack.posts[1]?.channel, 'CUPDATES');

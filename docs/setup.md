@@ -122,8 +122,12 @@ edits Codex session files or chooses the global last session.
 | `maxRetainedEvents` | 10,000 | Admission stops at dedup capacity |
 
 Tool sends also have a ten-call limit and a 30-second per-send deadline, checked
-between chunks (an in-flight Slack call has a 10-second timeout). Output is redacted, escaped, and split into
-at most 3,000-unit Slack chunks. Raw CLI output is limited to 16 MB per turn and
+between chunks (an in-flight Slack call has a 10-second timeout). Replies support
+Slack mrkdwn: `*bold*`, blank lines, bullets and `<https://example.com|label>` links.
+Bare HTTP/HTTPS URLs also become clickable. Slack mentions and link/media previews
+are disabled. Output is redacted, escaped outside supported web-link controls,
+and split into at most 3,000-unit Slack chunks without cutting explicit links.
+Raw CLI output is limited to 16 MB per turn and
 about 1 MB per JSONL event; excess fails safely. `secretEnvNames` lists additional
 environment variable names for exact-value output redaction; their values stay
 in the runtime environment because they may be provider credentials. All

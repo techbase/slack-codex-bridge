@@ -1,5 +1,22 @@
 export const MESSAGE_CHARS = 3000;
 
+function escape(text: string): string {
+  return text.replace(/[&<>]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[character]!);
+}
+
+/** Preserve web links, but never Slack mentions, channel references or other controls. */
+function webLink(token: string): string | undefined {
+  const match = /^<(https?:\/\/[^\s<>|]+)(?:\|([^<>|\r\n]+))?>$/.exec(token);
+  if (!match || (match[2] !== undefined && !match[2].trim())) return;
+  try {
+    const url = new URL(match[1]!);
+    if (!url.hostname || !['http:', 'https:'].includes(url.protocol)) return;
+  } catch { return; }
+  const link = `<${escape(match[1]!)}${match[2] === undefined ? '' : `|${escape(match[2])}`}>`;
+  // An oversized link remains literal text rather than being split as active markup.
+  return link.length <= MESSAGE_CHARS ? link : undefined;
+}
+
 /** Redact before truncation/splitting so a secret crossing a boundary stays private. */
 export function slackChunks(text: string, secrets: string[], maxChars: number): string[] {
   for (const secret of [...new Set(secrets)].sort((a, b) => b.length - a.length)) {
@@ -11,11 +28,23 @@ export function slackChunks(text: string, secrets: string[], maxChars: number): 
   }
   const chunks: string[] = [];
   let chunk = '';
-  // Split only between Unicode code points and escaped entities.
-  for (const character of text) {
-    const escaped = character === '&' ? '&amp;' : character === '<' ? '&lt;' : character === '>' ? '&gt;' : character;
-    if (chunk.length + escaped.length > MESSAGE_CHARS) { chunks.push(chunk); chunk = ''; }
-    chunk += escaped;
+  const append = (token: string) => {
+    if (chunk.length + token.length > MESSAGE_CHARS) {
+      // Keep ordinary paragraphs and headings together where there is room.
+      const newline = chunk.lastIndexOf('\n') + 1;
+      if (newline >= MESSAGE_CHARS / 2) {
+        chunks.push(chunk.slice(0, newline));
+        chunk = chunk.slice(newline);
+      }
+      if (chunk.length + token.length > MESSAGE_CHARS) { chunks.push(chunk); chunk = ''; }
+    }
+    chunk += token;
+  };
+  // Web links are atomic; other text splits only between code points/entities.
+  for (const [token] of text.matchAll(/<[^<>\n]*>|[\s\S]/gu)) {
+    const link = webLink(token);
+    if (link) append(link);
+    else for (const character of token) append(escape(character));
   }
   if (chunk) chunks.push(chunk);
   return chunks;
@@ -25,8 +54,7 @@ export interface SlackPost {
   channel: string;
   thread_ts?: string;
   text: string;
-  mrkdwn: false;
-  parse: 'none';
+  mrkdwn: true;
   link_names: false;
   unfurl_links: false;
   unfurl_media: false;
@@ -36,6 +64,6 @@ export interface SlackSender { post(message: SlackPost): Promise<void> }
 
 export async function sendText(sender: SlackSender, channel: string, thread: string | undefined, text: string, secrets: string[], maxChars: number): Promise<void> {
   for (const chunk of slackChunks(text, secrets, maxChars)) {
-    await sender.post({ channel, thread_ts: thread, text: chunk, mrkdwn: false, parse: 'none', link_names: false, unfurl_links: false, unfurl_media: false });
+    await sender.post({ channel, thread_ts: thread, text: chunk, mrkdwn: true, link_names: false, unfurl_links: false, unfurl_media: false });
   }
 }

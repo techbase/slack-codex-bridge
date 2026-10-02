@@ -29,8 +29,11 @@ No service token appears in model prompts, MCP configuration arguments or Bridge
 logs. Provider/tool/runtime behavior under the operator's own configuration remains
 the operator's responsibility.
 
-Output escapes Slack control syntax, disables parsing/markdown/mentions/unfurls,
-redacts exact configured secret values and bounds text. This cannot identify every
+Output supports Slack mrkdwn and clickable web links. It escapes Slack mention,
+channel and other control syntax, preserves only valid HTTP/HTTPS link controls,
+disables automatic mentions and link/media unfurls, redacts exact configured
+secret values and bounds text. Long explicit links remain literal if they exceed
+one chunk. This cannot identify every
 unknown, transformed or project-stored secret. Model answers can disclose anything
 the runtime knows to everyone who can read the destination channel. Keep channel
 audiences and information sensitivity compatible. Prompts are not access controls.
