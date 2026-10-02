@@ -19,7 +19,7 @@ export async function doctor(config: Config, env = process.env): Promise<DoctorC
   for (const name of config.secretEnvNames) add('configured redaction value', !!env[name], env[name] ? 'Present.' : 'A configured secret environment variable is missing.');
   try { accessSync(MCP_ENTRY, constants.R_OK); add('Bridge MCP build', true, 'Stdio entry point is available.'); }
   catch { add('Bridge MCP build', false, 'Run npm run build.'); }
-  try { await preflight(config, env); add('Codex CLI', true, 'Pinned CLI supports stdin/JSON/resume; invocation-local Bridge MCP preserves existing MCP configuration. No model turn run.'); }
+  try { await preflight(config, env); add('Codex CLI', true, `Pinned CLI supports ${config.codex.transport === 'app-server' ? 'native app-server stdio' : 'stdin/JSON/resume'}; invocation-local Bridge MCP preserves existing MCP configuration. No model turn run.`); }
   catch (error) { add('Codex CLI', false, error instanceof SetupError ? error.message : 'CLI probe failed.'); }
   add('Codex environment', true, 'Inherited from the normal runtime and explicit preset. Authentication validity and execution permissions remain untested; use your already-working Codex setup.');
   return checks;

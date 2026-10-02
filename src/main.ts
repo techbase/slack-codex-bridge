@@ -1,6 +1,7 @@
 import { App } from '@slack/bolt';
 import { Bridge, systemClock, type Diagnostic } from './bridge.js';
 import { CodexModel } from './codex.js';
+import { AppServerModel } from './app-server.js';
 import { loadConfig, secretsFromEnvironment, SetupError } from './config.js';
 import { doctor } from './doctor.js';
 import { appOptions, slackSender, verifySlackIdentity, wireSlack } from './slack.js';
@@ -46,7 +47,8 @@ async function main(): Promise<void> {
     app = new App(appOptions(process.env.SLACK_BOT_TOKEN!, process.env.SLACK_APP_TOKEN!, diagnostic));
     await app.init();
     await verifySlackIdentity(app, config);
-    bridge = new Bridge(config, store, new CodexModel(config), slackSender(app), secretsFromEnvironment(config), diagnostic, systemClock, () => {
+    const model = config.codex.transport === 'app-server' ? new AppServerModel(config) : new CodexModel(config);
+    bridge = new Bridge(config, store, model, slackSender(app), secretsFromEnvironment(config), diagnostic, systemClock, () => {
       process.exitCode = 1;
       void shutdown().catch(() => { diagnostic('shutdown_failed'); });
     });

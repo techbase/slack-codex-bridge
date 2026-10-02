@@ -11,6 +11,12 @@ permissions. It does not create a new account or sandbox, change your Codex
 configuration, or silently enable bypass flags. Give Slack access only to people
 you trust to use that Codex runtime. Claude CLI and Pi CLI are not supported yet.
 
+Set `codex.transport` to `"app-server"` for native Codex sessions with approvals
+and questions relayed through Slack. Reply in the same thread with `approve`,
+`deny`, or the requested answer. Only the requester or a configured operator may
+answer. Existing saved Codex session IDs continue to work. The default `"exec"`
+transport remains available for noninteractive presets.
+
 ## Quick start
 
 Use macOS or Linux with Node **24.16.0+** and a working Codex setup. This release
@@ -45,6 +51,10 @@ manifest, native/server operation, migration and the optional Docker example.
   `status` and `cancel` are local controls (also usable with a bot mention).
 - Each Slack thread has its own saved CLI session ID. Requests are bounded,
   deduplicated and serialized through the fixed CLI working directory.
+- In app-server mode, native command/file/permission approvals, questions and MCP
+  elicitations are returned to the originating thread. Bridge never approves them
+  automatically. `status` shows pending prompts; `cancel` stops a waiting turn.
+  Set `turnTimeoutMs: 0` to disable the turn deadline explicitly.
 - Messages with attachments also forward their text, including thread replies.
   Queue acknowledgements explain that file contents are not forwarded. An
   attachment-only message gets a reply asking for text and starts no CLI turn.

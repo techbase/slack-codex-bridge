@@ -18,6 +18,7 @@ test('configuration rejects ambiguous routing, obsolete policies, command inject
     { codex: { ...config.codex, args: ['--last'] } },
     { codex: { ...config.codex, args: ['--profile'] } },
     { codex: { ...config.codex, sendToolApprovalMode: 'allow-all' } },
+    { codex: { ...config.codex, transport: 'shell' } }, { turnTimeoutMs: -1 }, { turnTimeoutMs: 999 },
   ]) assert.throws(() => parseConfig({ ...config, ...invalid }));
   const alias = path.join(root, 'alias'); symlinkSync(config.stateDir, alias);
   assert.throws(() => parseConfig({ ...config, stateDir: alias }), /symlink/);
@@ -43,5 +44,7 @@ test('normal configuration and explicit operator permissions are accepted; cwd i
   writeFileSync(file, 'PRIVATE invalid JSON');
   assert.throws(() => loadConfig(file), error => error instanceof Error && !error.message.includes('PRIVATE'));
   assert.deepEqual(parseConfig({ ...config, outgoingChannels: {} }).outgoingChannels, {});
+  assert.equal(parseConfig({ ...config, turnTimeoutMs: 0 }).turnTimeoutMs, 0);
+  assert.equal(parseConfig({ ...config, codex: { ...config.codex, transport: 'app-server' } }).codex.transport, 'app-server');
   assert.ok(parseConfig({ ...config, codex: { ...config.codex, args: ['--dangerously-bypass-approvals-and-sandbox'] } }));
 });
