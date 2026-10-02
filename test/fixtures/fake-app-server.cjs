@@ -42,9 +42,9 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       method = 'item/fileChange/requestApproval';
       notify('item/started', { threadId: thread, turnId: 'turn-1', item: { id: 'item-1', type: 'fileChange', changes: [{ path: '/fictional/change.txt', diff: '+ fixture' }] } });
     } else if (prompt === 'permissions') { method = 'item/permissions/requestApproval'; params.permissions = { network: { enabled: true }, fileSystem: null }; }
-    else if (prompt === 'question' || prompt === 'secret') {
+    else if (['question', 'secret', 'question-key'].includes(prompt)) {
       method = 'item/tool/requestUserInput';
-      params.questions = [{ id: 'choice', question: 'Which option?', isSecret: prompt === 'secret', isOther: false, options: [{ label: 'One', description: 'First' }, { label: 'Two', description: 'Second' }] }];
+      params.questions = [{ id: prompt === 'question-key' ? '__proto__' : 'choice', question: 'Which option?', isSecret: prompt === 'secret', isOther: false, options: [{ label: 'One', description: 'First' }, { label: 'Two', description: 'Second' }] }];
     } else if (prompt === 'form') { method = 'mcpServer/elicitation/request'; params.mode = 'form'; params.serverName = 'fixture'; params.message = 'Tool confirmation'; params.requestedSchema = { type: 'object', properties: { decision: { type: 'string', enum: ['accept', 'decline'] } }, required: ['decision'] }; }
     else if (prompt === 'unknown') method = 'item/unrecognized/requestApproval';
     else { finish(prompt === 'failed' ? 'failed' : 'completed'); return; }

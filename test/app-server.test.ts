@@ -101,6 +101,15 @@ test('plain human replies answer native questions and denials without starting a
   assert.equal(records().filter(r => r.answer).length, 2);
 });
 
+test('native question identifiers remain opaque data when constructing answer maps', async t => {
+  const { config, model, records } = fake(t);
+  await model.run({ project: config.codex.cwd, prompt: 'question-key', signal: new AbortController().signal, onThread() {}, sendMessage: noSend,
+    interact: async prompt => prompt.parse('answer', '2') });
+  const answer = records().find(r => r.answer).answer.answers;
+  assert.equal(Object.hasOwn(answer, '__proto__'), true);
+  assert.deepEqual(answer['__proto__'], { answers: ['Two'] });
+});
+
 test('uncertain approval delivery stops the native turn without approving or retrying', async t => {
   const { config, model, records } = fake(t);
   const store = new Store(config, NOW);

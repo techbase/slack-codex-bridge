@@ -153,7 +153,7 @@ async function nativePrompt(method: string, params: Json, item: Json | undefined
   }
   if (method === 'item/tool/requestUserInput') {
     if (!Array.isArray(params.questions) || !params.questions.length || params.questions.length > 3) throw new ModelFailure('invalid_result');
-    const answers: Record<string, { answers: string[] }> = {};
+    const answers: Record<string, { answers: string[] }> = Object.create(null);
     for (const question of params.questions) {
       if (!object(question) || typeof question.id !== 'string' || typeof question.question !== 'string') throw new ModelFailure('invalid_result');
       if (question.isSecret) throw new ModelFailure('unsupported_interaction'); // Never ask for credentials in Slack.
