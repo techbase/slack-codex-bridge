@@ -114,3 +114,13 @@ follow-up durably, waits for the prior child to exit, then preserves normal queu
 order. An oversized request, full queue or uncertain attachment notice leaves
 the approval wait intact. Explicit approval/denial and native question/form
 answers keep their existing validation. Withdrawn prompt IDs cannot be reused.
+
+An optional operator-configured `humanMessageCommand` provides a generic
+authenticated-human extension. It runs fixed absolute argv with the admitted
+event on stdin, after native prompt handling and in normal job order. It can
+return a bounded direct response or untrusted context for the model. A handled
+response may include an opaque receipt; after its delivery settles Bridge calls
+the same command with a delivery acknowledgement before starting the next job.
+Consumers must bind approvals only after a positive acknowledgement. Hook errors
+never replay the event or fall through to a model after a possible mutation.
+This is a local operator extension, not same-account filesystem isolation.
