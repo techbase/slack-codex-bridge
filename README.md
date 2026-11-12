@@ -50,7 +50,9 @@ manifest, native/server operation, migration and the optional Docker example.
 - Ordinary messages trigger by default; `mentionOnly: true` is optional. `help`,
   `status` and `cancel` are local controls (also usable with a bot mention).
 - Each Slack thread has its own saved CLI session ID. Requests are bounded,
-  deduplicated and serialized through the fixed CLI working directory. Ordinary
+  deduplicated and serialized per conversation. Up to `maxConcurrentTurns`
+  independent conversations can run concurrently (default four); saved native
+  chats cannot overlap even when two Slack roots share an ID. Ordinary
   requests start quietly; use `status` to see active or queued work.
 - In app-server mode, native command/file/permission approvals, questions and MCP
   elicitations are returned to the originating thread. Bridge never approves them
@@ -68,8 +70,10 @@ manifest, native/server operation, migration and the optional Docker example.
   notice, even after Codex has sent a progress message.
 - Replies use Slack formatting with bold headings, spacing and clickable web
   links. Mentions and link/media previews stay disabled.
-- Uncertain sends are never automatically retried. Restart never replays queued
-  or potentially executed work. Use `status` before explicitly asking again.
+- Uncertain sends are never automatically retried. Accepted queued requests
+  do not expire by age. Restart preserves acknowledged, unstarted queue entries;
+  active or uncertain-notice work is interrupted and never automatically replayed.
+  Use `status` before explicitly asking again.
 
 See [architecture](docs/architecture.md), [security and limits](docs/security.md),
 and [a fictional transcript](docs/transcript.md). This is a transport, without a
@@ -101,11 +105,14 @@ truncated text, unreadable parents or edits after the reply remain explicit
 ambiguities; owning request/scope checks and native approval controls still apply.
 No attachment contents or other authors’ root messages are fetched into context.
 
-State schema 2 adds a reply timestamp while preserving saved sessions and jobs.
-For a binary rollback to schema-1 code, stop Bridge while idle, set only
-`PRAGMA user_version=1` on its private database and retain the extra column.
-Older code ignores the additive column. Do not remove the database or reset
-sessions, and never automatically replay interrupted or uncertain work.
+State schema 3 preserves saved sessions/jobs and adds bounded request context,
+terminal summaries, exact native identities and separate outcome-delivery proof.
+Execution prompts are cleared on settlement; retained summaries follow retention.
+Back up SQLite consistently before changing versions. A rollback to schema-2 code
+requires a stopped service and setting only `PRAGMA user_version=2`, retaining the
+additive columns. Older code interrupts queued work instead of preserving it;
+retain an operator snapshot for reconciliation. Never reset sessions or replay
+interrupted/uncertain work automatically.
 
 While a native approval is waiting, an ordinary follow-up from its requester or
 a configured operator withdraws the blocked turn and continues the same saved

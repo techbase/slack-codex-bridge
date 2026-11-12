@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, watch } from 'node:fs';
 import path from 'node:path';
 import test, { type TestContext } from 'node:test';
 import { AppServer, AppServerModel } from '../src/app-server.js';
@@ -8,12 +8,12 @@ import { ModelFailure, preflight } from '../src/codex.js';
 import { Store } from '../src/store.js';
 import { deferred, fixture, ManualClock, message, NOW, RecordingSlack } from './helpers.js';
 
-function fake(t: TestContext) {
+function fake(t: TestContext, reconcileIntervalMs?: number) {
   const f = fixture(t);
   f.config.codex.transport = 'app-server';
   f.config.codex.executable = path.join(f.root, 'fake-app-server');
   writeFileSync(f.config.codex.executable, `#!${process.execPath}\n` + readFileSync(new URL('../../test/fixtures/fake-app-server.cjs', import.meta.url), 'utf8'), { mode: 0o700 });
-  const model = new AppServerModel(f.config, f.env);
+  const model = new AppServerModel(f.config, f.env, reconcileIntervalMs);
   return { ...f, model, records: () => readFileSync(path.join(f.root, 'rpc.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line)) };
 }
 const noSend = async () => ({ ok: false, message: 'No live sends.' });
@@ -306,4 +306,77 @@ test('uncertain attachment-notice delivery does not withdraw the waiting approva
   await f.bridge.idle();
   assert.equal(f.records().filter(r => r.method === 'turn/start').length, 1);
   assert.deepEqual(f.records().filter(r => r.answer).map(r => r.answer), [{ decision: 'decline' }]);
+});
+
+test('owning-connection reconciliation recovers a missing terminal notification without replaying', async t => {
+  for (const prompt of ['reconcile-completed', 'reconcile-poll']) await t.test(prompt, async t => {
+    const f = fake(t, 5);
+    const turns: string[] = [];
+    const answer = await f.model.run({ project: f.config.codex.cwd, prompt, signal: new AbortController().signal,
+      onThread() {}, onTurn: id => turns.push(id), sendMessage: noSend });
+    assert.equal(answer, 'Native final answer.');
+    assert.deepEqual(turns, ['turn-1']);
+    const records = f.records();
+    assert.equal(records.filter(r => r.method === 'turn/start').length, 1);
+    assert.ok(records.some(r => r.method === 'thread/read' && r.params.includeTurns === false));
+    assert.deepEqual(records.find(r => r.method === 'thread/turns/list').params,
+      { threadId: 'fixture-native-0001', limit: 20, sortDirection: 'desc', itemsView: 'summary' });
+    assert.throws(() => process.kill(records.find(r => r.start).start.pid, 0), { code: 'ESRCH' });
+  });
+});
+
+test('reconciliation never treats missing output, interrupted or failed native turns as successful completion', async t => {
+  for (const prompt of ['reconcile-empty', 'reconcile-interrupted', 'reconcile-failed']) await t.test(prompt, async t => {
+    const f = fake(t, 5);
+    await assert.rejects(f.model.run({ project: f.config.codex.cwd, prompt, signal: new AbortController().signal,
+      onThread() {}, sendMessage: noSend }), error => error instanceof ModelFailure && error.reason === 'model_failed');
+    assert.equal(f.records().filter(r => r.method === 'turn/start').length, 1);
+    assert.throws(() => process.kill(f.records().find(r => r.start).start.pid, 0), { code: 'ESRCH' });
+  });
+});
+
+test('active or observer-local notLoaded runtime state and another turn cannot end the owned turn', async t => {
+  for (const prompt of ['reconcile-active', 'reconcile-notLoaded', 'reconcile-foreign']) await t.test(prompt, async t => {
+    const f = fake(t, 5);
+    assert.equal(await f.model.run({ project: f.config.codex.cwd, prompt, signal: new AbortController().signal,
+      onThread() {}, sendMessage: noSend }), 'Native final answer.');
+    const records = f.records();
+    assert.ok(records.filter(r => r.method === 'thread/read').length >= 2);
+    assert.equal(records.filter(r => r.method === 'thread/turns/list').length, prompt === 'reconcile-foreign' ? 1 : 0);
+    assert.equal(records.filter(r => r.method === 'turn/start').length, 1);
+  });
+});
+
+test('native closure and non-retrying errors settle the exact owned turn without exposing provider diagnostics', async t => {
+  for (const prompt of ['native-closed', 'native-error']) await t.test(prompt, async t => {
+    const f = fake(t, 5);
+    await assert.rejects(f.model.run({ project: f.config.codex.cwd, prompt, signal: new AbortController().signal,
+      onThread() {}, sendMessage: noSend }), error => error instanceof ModelFailure && !error.message.includes('PRIVATE'));
+    assert.throws(() => process.kill(f.records().find(r => r.start).start.pid, 0), { code: 'ESRCH' });
+  });
+  const f = fake(t, 5);
+  assert.equal(await f.model.run({ project: f.config.codex.cwd, prompt: 'foreign-native-error', signal: new AbortController().signal,
+    onThread() {}, sendMessage: noSend }), 'Native final answer.');
+});
+
+test('owning-connection probes preserve a live human approval wait until its explicit answer', async t => {
+  const f = fake(t, 5), controller = new AbortController(), asked = deferred<AbortSignal>(), answered = deferred<unknown>();
+  const running = f.model.run({ project: f.config.codex.cwd, prompt: 'reconcile-waiting', signal: controller.signal,
+    onThread() {}, sendMessage: noSend, interact: (_, signal) => { asked.resolve(signal); return answered.promise; } });
+  t.after(() => controller.abort());
+  const signal = await asked.promise;
+  await new Promise<void>((resolve, reject) => {
+    const check = () => {
+      let records: any[]; try { records = f.records(); } catch { return; }
+      if (records.filter(r => r.method === 'thread/read').length < 2) return;
+      watcher.close();
+      try { assert.equal(signal.aborted, false); resolve(); } catch (error) { reject(error); }
+    };
+    const watcher = watch(f.root, check);
+    t.after(() => watcher.close());
+    check();
+  });
+  answered.resolve({ decision: 'accept' });
+  assert.equal(await running, 'Native final answer.');
+  assert.deepEqual(f.records().filter(r => r.answer).map(r => r.answer), [{ decision: 'accept' }]);
 });

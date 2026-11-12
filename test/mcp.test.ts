@@ -108,3 +108,29 @@ test('broker closes its capability after settlement and a disconnected client ca
   await assert.rejects(fetch(broker.env.BRIDGE_SEND_URL!, { method: 'POST', body: '{}' }));
   assert.equal(sends, 1);
 });
+
+test('optional operator metadata uses a scoped capability and never sends Slack', async t => {
+  const { env } = fixture(t);
+  const observations: unknown[] = [];
+  const broker = await openSender(async () => ({ok:false,message:'No sends'}), async input => { observations.push(input); return {ok:true,message:'Recorded'}; });
+  const client = new Client({name:'operator-fixture',version:'1'});
+  t.after(async () => { await client.close(); await broker.close(); });
+  await client.connect(new StdioClientTransport({command:process.execPath,args:[MCP_ENTRY],env:{...env as Record<string,string>,...broker.env},stderr:'ignore'}));
+  assert.deepEqual((await client.listTools()).tools.map(x=>x.name).sort(), ['report_state','send_message']);
+  assert.equal((await client.callTool({name:'report_state',arguments:{id:'wait-1',data:{state:'waiting'}}})).isError,false);
+  assert.deepEqual(observations,[{id:'wait-1',data:{state:'waiting'}}]);
+  const denied = await fetch(broker.env.BRIDGE_STATE_URL!,{method:'POST',body:'{}'});
+  assert.equal(denied.status,403);
+  assert.equal(observations.length,1);
+});
+
+test('progress delivery never proves an outcome and explicit outcome is restricted to its thread', async t => {
+  const {config}=fixture(t); const store=new Store(config,NOW);t.after(()=>store.close());
+  const job=store.enqueue({team:config.teamId,channel:'CPROJECT',root:'1800000000.000001',project:config.codex.cwd},'outcome-fixture','UALICE','request',NOW)!;
+  const slack=new RecordingSlack(),controller=new AbortController();
+  const sender=new TurnSender(config,job,store,slack,[],controller.signal);
+  assert.equal((await sender.send({text:'Working'})).ok,true);assert.equal(sender.outcomeDelivery,'unknown');
+  assert.equal((await sender.send({text:'Done',kind:'outcome',destination:'updates'})).ok,false);
+  assert.equal((await sender.send({text:'Done',kind:'outcome'})).ok,true);assert.equal(sender.outcomeDelivery,'sent');assert.equal(store.job(job.id)?.final_delivery,'sent');
+  assert.equal(slack.posts.length,2);
+});

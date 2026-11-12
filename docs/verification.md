@@ -40,3 +40,32 @@ Unicode pipe boundaries, invalid/oversized output, redaction, event deduplicatio
 and uncertain acknowledgement behavior. Dependency audit reports zero
 vulnerabilities. Existing native approval controls remain unchanged. These
 checks use local fixtures and no live Slack message or product action.
+
+## Concurrent request lifecycle and routing
+
+Independent conversation lanes now run concurrently within a configured bound,
+while shared native chat IDs and per-lane attachment notices preserve ordering.
+Accepted queued work survives its former expiry and acknowledged unstarted work
+survives restart; active/uncertain-notice work is never replayed. Dedup identity
+stays protected for unfinished jobs beyond normal retention age.
+
+The additive schema-3 snapshot exposes retained bounded request/outcome context,
+exact native identities and explicit outcome delivery separately from progress.
+The operator CLI reads existing schemas 1–3 without instance locking, recovery,
+Slack authentication or model execution. A read against an existing running
+schema-2 instance succeeded; historical unknown final proof and missing reply
+timestamps remained unknown/missing.
+
+Native macOS qualification passed npm ci, typecheck/build, all 136 tests and
+npm audit with zero advisories in an isolated staging directory. Added coverage
+includes bounded concurrent lanes, shared-chat FIFO, scoped cancellation, queue
+survival, restart/dedup, read-only snapshot paging/legacy data and separate final
+delivery proof. Missing native completion notifications are reconciled only from
+the invocation's own connection and exact owned turn; foreign, active, notLoaded
+and unavailable observations do not establish completion or authorize replay.
+
+The generic operator report_state hook and explicit send_message outcome kind
+were exercised through real fixture processes/MCP clients. Lifecycle metadata
+does not authorize product work or native approvals. Qualification sent no extra
+live Slack messages or product actions. Live provider behavior, production
+completion-watch delivery and optional Docker packaging remain separate checks.

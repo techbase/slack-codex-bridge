@@ -1,4 +1,4 @@
-import { humanMessage, type HumanMessageResult } from './human-message.js';
+import { humanMessage, humanMessageObservation, type HumanMessageResult } from './human-message.js';
 import { ModelFailure, type Model } from './codex.js';
 import type { Config } from './config.js';
 import { sendText, type SlackSender } from './output.js';
@@ -19,6 +19,8 @@ export const systemClock: Clock = {
 export type Diagnostic = (reason: string, jobId?: string) => void;
 type ActiveTurn = { job: Job; controller: AbortController; done: Promise<void>; reason?: 'cancelled' | 'timed_out' | 'interrupted'; followup?: boolean };
 type Routed = Scope & { user: string; eventId: string; prompt: string; hasFiles: boolean; messageTs: string };
+
+function lane(scope: Scope): string { return JSON.stringify([scope.team, scope.channel, scope.root, scope.project]); }
 
 function object(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
@@ -113,12 +115,14 @@ export class Bridge {
     if (waiting && routed.user !== waiting.job.user && !this.config.operatorUserIds.includes(routed.user)) {
       await this.reply(routed, 'Only the requester or a configured operator may interrupt this approval wait.'); return;
     }
-    const interrupted = waiting ? this.active.get(routed.project) : undefined;
+    const interrupted = waiting ? this.active.get(lane(routed)) : undefined;
     if (routed.prompt.length > this.config.maxInputChars) {
       await this.reply(routed, `Request too long. Limit: ${this.config.maxInputChars} characters. Nothing was queued.`);
       return;
     }
-    const job = this.store.enqueue(routed, routed.eventId, routed.user, routed.prompt, this.clock.now(), routed.messageTs);
+    let requestText = routed.prompt;
+    for (const secret of this.secrets) if (secret) requestText = requestText.split(secret).join('[redacted]');
+    const job = this.store.enqueue(routed, routed.eventId, routed.user, routed.prompt, this.clock.now(), routed.messageTs, requestText);
     if (!job) { await this.reply(routed, 'Bridge is busy; the queue is full. Nothing was queued. Please ask again later.'); return; }
     const sent = routed.hasFiles
       ? await this.reply(job, 'Attachments were not sent to Codex; this request contains text only.')
@@ -134,7 +138,7 @@ export class Bridge {
     }
     if (this.closing) return;
     if (interrupted && !interrupted.reason && interrupted.job.id === waiting?.job.id
-        && this.active.get(routed.project) === interrupted
+        && this.active.get(lane(routed)) === interrupted
         && [...this.interactions.values()].some(p => p.job.id === interrupted.job.id && p.prompt.kind === 'approval' && !p.signal.aborted)) {
       interrupted.followup = true;
       interrupted.reason = 'interrupted';
@@ -200,7 +204,7 @@ export class Bridge {
     }
     const queuedIds: string[] = [];
     for (const job of eligible) {
-      const active = this.active.get(job.project);
+      const active = this.active.get(lane(job));
       if (active?.job.id === job.id) {
         active.reason ??= 'cancelled';
         active.controller.abort();
@@ -212,32 +216,31 @@ export class Bridge {
       }
     }
     const sent = await this.reply(scope, `Cancellation requested for ${eligible.length} request(s). Active turns must stop before the next turn starts.`);
-    for (const id of queuedIds) this.store.delivery(id, sent ? 'sent' : 'uncertain');
+    for (const id of queuedIds) { this.store.delivery(id, sent ? 'sent' : 'uncertain'); this.store.outcomeDelivery(id, sent ? 'sent' : 'uncertain'); }
     this.pump();
   }
 
   private pump(): void {
     if (this.closing) return;
     const awaitingNotice = new Set<string>();
+    const awaitingNativeNotice = new Set<string>();
     for (const job of this.store.queued()) {
-      if (this.clock.now() - job.created >= this.config.queueTtlMs) {
-        this.store.finish(job.id, 'interrupted', 'queue_expired', this.clock.now());
-        this.track(this.deliver(job, 'Request expired while queued. Nothing ran; send another message to ask.'));
-        continue;
-      }
+      const key = lane(job);
       // Preserve arrival order while an attachment notice is being delivered.
-      if (job.ack !== 'sent' && job.ack !== 'skipped') awaitingNotice.add(job.project);
-      if (awaitingNotice.has(job.project)) continue;
-      if (this.active.has(job.project) || this.active.size >= 1) continue;
+      const thread = this.store.thread(job);
+      if (job.ack !== 'sent' && job.ack !== 'skipped') { awaitingNotice.add(key); if (thread) awaitingNativeNotice.add(thread); }
+      if (awaitingNotice.has(key) || (thread !== undefined && awaitingNativeNotice.has(thread))) continue;
+      if (this.active.has(key) || this.active.size >= this.config.maxConcurrentTurns
+          || (thread !== undefined && [...this.active.values()].some(active => this.store.thread(active.job) === thread))) continue;
       this.store.activate(job.id, this.clock.now());
       const active = { job, controller: new AbortController(), done: Promise.resolve() } as ActiveTurn;
-      this.active.set(job.project, active);
+      this.active.set(key, active);
       active.done = this.execute(active).catch(() => {
         // Unexpected persistence failures stop admission. Recovery handles any
         // unfinished record; never fabricate success or expose exception payloads.
         this.fail('worker_failed', job.id);
       }).finally(() => {
-        this.active.delete(job.project);
+        this.active.delete(key);
         this.pump();
       });
     }
@@ -276,14 +279,18 @@ export class Bridge {
         extensionContext = JSON.parse(value);
       }
       answer = extension?.handled ? extension.response! : await this.model.run({ project: job.project, prompt: job.prompt!, parentContext, extensionContext, threadId: this.store.thread(job), signal: controller.signal,
-        onThread: id => this.store.saveThread(job, id, this.clock.now()), sendMessage: turnSender.send,
+        onThread: id => { this.store.saveThread(job, id, this.clock.now()); this.store.saveJobThread(job.id, id, this.clock.now()); }, onTurn: id => this.store.saveTurn(job.id, id, this.clock.now()), sendMessage: turnSender.send,
+        ...(this.config.humanMessageCommand ? { reportState: (input: unknown) => humanMessageObservation(this.config.humanMessageCommand!, job, input, controller.signal) } : {}),
         interact: (prompt, signal) => this.interaction(job, prompt, signal) });
       if (!turnSender.attempted && (typeof answer !== 'string' || !answer.trim())) failure = 'invalid_result';
     } catch (error) {
       failure = error instanceof ModelFailure ? error.reason : 'model_failed';
     } finally { await turnSender.settled(); stopTimeout(); }
     const state = active.reason ?? (failure ? 'failed' : 'completed');
-    this.store.finish(job.id, state, active.followup ? 'followup' : failure ?? active.reason ?? null, this.clock.now());
+    if (turnSender.outcomeDelivery !== 'unknown') this.store.outcomeDelivery(job.id, turnSender.outcomeDelivery);
+    let summary = state === 'completed' ? answer : (active.followup ? 'followup' : failure ?? active.reason ?? state);
+    for (const secret of this.secrets) if (secret) summary = summary.split(secret).join('[redacted]');
+    this.store.finish(job.id, state, active.followup ? 'followup' : failure ?? active.reason ?? null, this.clock.now(), summary);
     this.store.touchThread(job, this.clock.now());
     if (failure && !active.reason) this.diagnostic(failure, job.id);
     const output = state === 'completed' ? `Completed request ${job.id}.\n\n${answer}`
@@ -310,6 +317,7 @@ export class Bridge {
     this.store.delivery(job.id, priorUncertainty ? 'uncertain' : 'sending');
     const sent = await this.reply(job, text, job.id);
     this.store.delivery(job.id, sent && !priorUncertainty ? 'sent' : 'uncertain');
+    this.store.outcomeDelivery(job.id, sent && !priorUncertainty ? 'sent' : 'uncertain');
   }
 
   private async reply(scope: Scope, text: string, jobId?: string): Promise<boolean> {
@@ -338,7 +346,7 @@ export class Bridge {
     try {
       this.store.cleanup(this.clock.now());
       this.pump();
-      this.stopMaintenance = this.clock.timer(() => this.maintain(), Math.min(60_000, this.config.queueTtlMs));
+      this.stopMaintenance = this.clock.timer(() => this.maintain(), 60_000);
     } catch { this.fail('maintenance_failed'); }
   }
 
@@ -367,13 +375,9 @@ export class Bridge {
     this.stopMaintenance?.();
     for (const active of this.active.values()) { active.reason ??= 'interrupted'; active.controller.abort(); }
     await Promise.all([...this.handlers]);
-    try {
-      for (const job of this.store.unfinished()) {
-        if (job.state === 'queued') {
-          this.store.finish(job.id, 'interrupted', 'shutdown', this.clock.now());
-          await this.deliver(job, `Request ${job.id} interrupted by shutdown before execution. It will not be replayed.`);
-        }
-      }
-    } finally { await this.idle(); }
+    // Queued jobs have never started. Keep their durable admission and
+    // attachment acknowledgement so the next service can safely pick them up.
+    // Active turns are interrupted separately and are never replayed.
+    await this.idle();
   }
 }

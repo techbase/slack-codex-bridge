@@ -43,7 +43,12 @@ notice must be delivered before execution; an uncertain notice prevents executio
 The existing SQLite `ack` column records this notice as pending, sent, uncertain
 or skipped, preserving the database schema and existing session state.
 Controls are deterministic and cancellation is requester/operator scoped.
-The fixed cwd runs one CLI turn at a time, including across incoming channels.
+A conversation lane is keyed by workspace/channel/root/cwd. Each lane has one
+active turn; independent lanes run concurrently up to `maxConcurrentTurns`
+(default four, maximum sixteen). Different lanes sharing a saved native chat ID
+also serialize. Native prompt/cancel scope stays exact. Accepted queue entries
+have no time-based execution expiry; admission remains bounded by `maxPending`.
+Attachment notices preserve FIFO within their lane without blocking other lanes.
 
 `src/codex.ts` spawns the configured executable directly. Operator arguments are
 validated global CLI options followed by an invocation-local MCP override and
@@ -84,10 +89,14 @@ timeout, cancellation or shutdown gets a distinct terminal notice, without
 repeating the tool message or erasing prior delivery uncertainty. `status` reports
 CLI outcome and Slack delivery separately.
 
-`src/store.ts` retains schema version 1: dedup events, jobs and session IDs keyed
-by workspace/channel/root/cwd. Prompts are cleared at terminal state; answers are
-never stored. Startup marks queued/active jobs interrupted and pending/sending
-delivery uncertain. It never reruns work or sends on recovery. SQLite's local
+`src/store.ts` uses additive schema 3: dedup events, jobs and session IDs keyed
+by workspace/channel/root/cwd. Execution prompts are cleared at terminal state;
+request context and outcome summaries are retained up to 4,000 units each with
+truncation flags. Native turn/chat IDs and explicit outcome delivery are separate
+from progress delivery. Startup interrupts active work without replay, while
+acknowledged unstarted jobs remain queued. Uncertain/pending attachment notices
+interrupt their jobs. Pending delivery on unstarted jobs stays pending; potentially
+attempted delivery becomes uncertain. Recovery itself sends nothing. SQLite's local
 instance lock prevents two services using one state directory; it is not a
 cross-host coordinator. Retention and admission bounds stay in the existing store.
 
@@ -121,3 +130,36 @@ delivery must not authorize an unshown proposal. Acknowledgement errors are
 safely diagnosed without changing the delivered job result or retrying effects.
 The child has a 20-second bound and 64,000-character output cap; cancellation
 kills/reaps its process group. State belongs to the configured extension.
+
+## Read-only lifecycle snapshot
+
+An operator can run the built entry point with the same private configuration:
+
+```sh
+BRIDGE_CONFIG=/absolute/private/bridge.config.json node dist/src/main.js snapshot <<'JSON'
+{"limit":50}
+JSON
+```
+
+This bypasses doctor, Slack authentication/calls, model execution, instance locks
+and startup recovery. It opens the existing SQLite database read-only. The input
+is bounded JSON with optional `limit` (1–100) and opaque `cursor`. The response is
+`{version:1,generatedAt,jobs,nextCursor}`, ordered by stable creation time/job ID.
+Each job supplies its exact admitted route/actor/event, bounded text, transport
+state/reason, progress delivery, separate `outcomeDelivery`
+(`unknown|sent|uncertain`), native identities, timestamps and bounded outcome.
+Only records inside the current operator allowlists/cwd are exported. Unknown
+final-delivery evidence is never promoted from a progress post. Schema-1/2 reads
+do not migrate files and may lack historical text/outcome proof.
+
+A private consumer can reconcile idempotently by workspace/job ID and follow
+`nextCursor`. Absence from one page or a later retention-pruned snapshot
+does not mean a higher-level commitment is complete. The consumer owns its own
+retention and evidence policy; this transport adds no scheduler or project engine.
+
+Native turn reconciliation uses only the invocation's own app-server connection.
+An idle observation or 30-second probe checks exact chat/turn metadata; a completed
+turn requires terminal evidence for that owned turn and an observed final message.
+Active, unavailable, foreign and merely not-loaded states do not establish
+completion. This is lifecycle reconciliation, not an arbitrary execution timeout
+or permission to replay work.

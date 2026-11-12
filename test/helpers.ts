@@ -17,7 +17,7 @@ export function fixture(t: TestContext, overrides: Partial<Config> = {}): { root
   const config = parseConfig({ teamId: 'TEXAMPLE', botUserId: 'UBRIDGE', allowedUserIds: ['UALICE', 'UBOB', 'UOPERATOR'], operatorUserIds: ['UOPERATOR'],
     incomingChannelIds: ['CPROJECT', 'CSECOND', 'CALIAS'], outgoingChannels: { updates: 'CUPDATES' },
     codex: { executable: fileURLToPath(new URL('../../node_modules/.bin/codex', import.meta.url)), args: [], cwd: path.join(root, 'project') },
-    stateDir: path.join(root, 'state'),
+    stateDir: path.join(root, 'state'), maxConcurrentTurns: 1,
     ...overrides });
   return { root, config, project2, env: { HOME: root, CODEX_HOME: path.join(root, 'codex'), PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`, OPENSSL_CONF: '/dev/null' } };
 }

@@ -44,7 +44,7 @@ test('human hook receives the accepted event scope and exact text separately fro
   await bridge.accept(message('human-hook-event', `<@UBRIDGE> ${original}`, { thread_ts: ROOT, ts: REPLY }));
   const call = await f.model.started(1);
   const record = f.records()[0];
-  assert.deepEqual(record.envelope, { version: 1, phase: 'message', eventId: 'human-hook-event', messageTs: REPLY, team: 'TEXAMPLE', channel: 'CPROJECT', root: ROOT,
+  assert.deepEqual(record.envelope, { version: 1, phase: 'message', jobId: f.store.latest(f.scope)!.id, eventId: 'human-hook-event', messageTs: REPLY, team: 'TEXAMPLE', channel: 'CPROJECT', root: ROOT,
     actor: 'UALICE', project: f.config.codex.cwd, text: original, parent: { ...parent, text: 'Fixture proposal [redacted]' } });
   assert.deepEqual(record.extra, ['$(touch unexpected); literal']);
   assert.equal(call.request.prompt, original);
@@ -174,7 +174,7 @@ test('delivery callback carries the exact accepted human scope and receipt witho
   for (const delivered of [true, false]) {
     const result = await humanMessage(f.config.humanMessageCommand!, job, undefined, controller.signal, { receipt: prepared.receipt!, delivered });
     assert.deepEqual(result, { handled: false });
-    assert.deepEqual(f.records().at(-1).envelope, { version: 1, phase: 'delivery', receipt: 'fixture-receipt', delivered, eventId: 'receipt-event', messageTs: REPLY, team: 'TEXAMPLE', channel: 'CPROJECT', root: ROOT, actor: 'UALICE', project: f.config.codex.cwd, text: 'Prepare a fixture proposal.' });
+    assert.deepEqual(f.records().at(-1).envelope, { version: 1, phase: 'delivery', jobId: job.id, receipt: 'fixture-receipt', delivered, eventId: 'receipt-event', messageTs: REPLY, team: 'TEXAMPLE', channel: 'CPROJECT', root: ROOT, actor: 'UALICE', project: f.config.codex.cwd, text: 'Prepare a fixture proposal.' });
   }
   assert.equal(f.records().length, 3);
   assert.equal(f.records()[0].envelope.phase, 'message');

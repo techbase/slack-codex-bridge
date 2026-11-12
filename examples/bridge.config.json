@@ -14,6 +14,7 @@
   "stateDir": "/srv/bridge/state",
   "secretEnvNames": [],
   "maxPending": 20,
+  "maxConcurrentTurns": 4,
   "maxInputChars": 12000,
   "maxOutputChars": 24000,
   "turnTimeoutMs": 300000,

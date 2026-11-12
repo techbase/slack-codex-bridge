@@ -194,10 +194,10 @@ async function nativePrompt(method: string, params: Json, item: Json | undefined
 
 /** Native thread/turn API, including server-initiated approvals and user input. */
 export class AppServerModel implements Model {
-  constructor(private config: Config, private env = process.env) {}
+  constructor(private config: Config, private env = process.env, private reconcileIntervalMs = 30_000) {}
 
   async run(request: ModelRequest): Promise<string> {
-    const sender = await openSender(request.sendMessage);
+    const sender = await openSender(request.sendMessage, request.reportState);
     let client: AppServer | undefined;
     const pending = new Map<Id, AbortController>();
     const items = new Map<string, Json>();
@@ -205,6 +205,9 @@ export class AppServerModel implements Model {
     let turnId = '';
     let final = '';
     let complete = false;
+    let reconcileTimer: NodeJS.Timeout | undefined;
+    let reconcileRequested = false;
+    let reconcileNow = () => { reconcileRequested = true; };
     let resolveTurn!: () => void;
     let rejectTurn!: (error: Error) => void;
     const ended = new Promise<void>((resolve, reject) => { resolveTurn = resolve; rejectTurn = reject; });
@@ -230,6 +233,10 @@ export class AppServerModel implements Model {
             final = item.text;
           }
           if (method === 'item/completed') items.delete(item.id);
+        } else if (method === 'thread/status/changed') {
+          if (params.status?.type === 'idle' || params.status?.type === 'systemError') reconcileNow();
+        } else if (method === 'thread/closed' || (method === 'error' && params.turnId === turnId && params.willRetry === false)) {
+          if (!complete) { complete = true; rejectTurn(new ModelFailure('model_failed')); }
         } else if (method === 'turn/completed') {
           if (complete || params.turn?.id !== turnId) throw new ModelFailure('invalid_result');
           complete = true;
@@ -263,9 +270,47 @@ export class AppServerModel implements Model {
       const turn = await rpc.request('turn/start', { threadId, input: [{ type: 'text', text: slackContext(this.config, request.parentContext, request.extensionContext) + request.prompt }] });
       if (!identifier(turn.turn?.id) || (turnId && turnId !== turn.turn.id)) throw new ModelFailure('invalid_result');
       turnId = turn.turn.id;
+      request.onTurn?.(turnId);
+      // Reconcile through this same owning connection. A separate reader's
+      // persisted interrupted/notLoaded status is not live execution evidence.
+      // Reads are bounded and never resume, interrupt or replay another turn.
+      let reconciling = false;
+      const schedule = () => {
+        if (complete || request.signal.aborted) return;
+        reconcileTimer = setTimeout(() => { reconcileTimer = undefined; reconcileNow(); }, this.reconcileIntervalMs);
+      };
+      reconcileNow = () => {
+        if (complete || request.signal.aborted || reconciling) return;
+        reconciling = true;
+        if (reconcileTimer) clearTimeout(reconcileTimer);
+        reconcileTimer = undefined;
+        void (async () => {
+          const snapshot = await rpc.request('thread/read', { threadId, includeTurns: false });
+          if (complete || request.signal.aborted) return;
+          if (snapshot.thread?.id !== threadId) throw new ModelFailure('invalid_result');
+          if (!['idle', 'systemError'].includes(snapshot.thread.status?.type)) return;
+          const turns = await rpc.request('thread/turns/list', { threadId, limit: 20, sortDirection: 'desc', itemsView: 'summary' });
+          if (complete || request.signal.aborted) return;
+          if (!Array.isArray(turns.data) || turns.data.length > 20) throw new ModelFailure('invalid_result');
+          const owned = turns.data.find((value: Json) => value?.id === turnId);
+          if (!owned || owned.status === 'inProgress') return;
+          if (!['completed', 'interrupted', 'failed'].includes(owned.status)) throw new ModelFailure('invalid_result');
+          complete = true;
+          // Recover success only when the final answer was actually observed.
+          // An ended turn without its output is an uncertain result, not proof
+          // that a previous progress message was its final answer.
+          if (owned.status === 'completed' && final.trim()) resolveTurn();
+          else rejectTurn(new ModelFailure('model_failed'));
+        })().catch(error => {
+          if (!complete && !request.signal.aborted) rpc.fail(error instanceof ModelFailure ? error : new ModelFailure('model_failed'));
+        }).finally(() => { reconciling = false; schedule(); });
+      };
+      if (reconcileRequested) reconcileNow(); else schedule();
       await ended;
       return final;
     } finally {
+      complete = true; // A settling probe must never re-arm after cleanup starts.
+      if (reconcileTimer) clearTimeout(reconcileTimer);
       for (const controller of pending.values()) controller.abort();
       await client?.close();
       await sender.close();
