@@ -23,6 +23,7 @@ export interface Config {
   retentionMs: number;
   maxRetainedEvents: number;
   secretEnvNames: string[];
+  humanMessageCommand?: string[];
 }
 
 const defaults = {
@@ -85,7 +86,7 @@ export function parseConfig(input: unknown): Config {
   }
   if (!object(input)) throw new SetupError('Configuration must be a JSON object.');
   const raw = input;
-  const keys = new Set(['teamId', 'botUserId', 'allowedUserIds', 'operatorUserIds', 'incomingChannelIds', 'outgoingChannels', 'mentionOnly', 'codex', 'stateDir', 'secretEnvNames', ...Object.keys(defaults)]);
+  const keys = new Set(['teamId', 'botUserId', 'allowedUserIds', 'operatorUserIds', 'incomingChannelIds', 'outgoingChannels', 'mentionOnly', 'codex', 'stateDir', 'secretEnvNames', 'humanMessageCommand', ...Object.keys(defaults)]);
   if (Object.keys(raw).some(key => !keys.has(key))) throw new SetupError('Unknown configuration key; migrate old pilot configuration using the current example.');
   const teamId = identities([raw.teamId], /^T[A-Z0-9]{2,30}$/, 'teamId')[0]!;
   const botUserId = identities([raw.botUserId], /^[UW][A-Z0-9]{2,30}$/, 'botUserId')[0]!;
@@ -134,7 +135,12 @@ export function parseConfig(input: unknown): Config {
   }
   if (limits.retentionMs < limits.queueTtlMs) throw new SetupError('retentionMs must be at least queueTtlMs.');
   const secretEnvNames = identities(raw.secretEnvNames ?? [], /^[A-Z_][A-Z0-9_]{0,99}$/, 'secretEnvNames', true);
-  return { teamId, botUserId, allowedUserIds, operatorUserIds, incomingChannelIds, outgoingChannels, mentionOnly: raw.mentionOnly ?? false, codex, stateDir, secretEnvNames, ...limits };
+  const humanMessageCommand = raw.humanMessageCommand;
+  if (humanMessageCommand !== undefined && (!Array.isArray(humanMessageCommand) || humanMessageCommand.length < 1 || humanMessageCommand.length > 30
+      || !humanMessageCommand.every(arg => typeof arg === 'string' && arg.length <= 8000 && !arg.includes('\0')) || !path.isAbsolute(humanMessageCommand[0]))) {
+    throw new SetupError('humanMessageCommand must be fixed absolute argv.');
+  }
+  return { ...(humanMessageCommand === undefined ? {} : { humanMessageCommand: [...humanMessageCommand] as string[] }), teamId, botUserId, allowedUserIds, operatorUserIds, incomingChannelIds, outgoingChannels, mentionOnly: raw.mentionOnly ?? false, codex, stateDir, secretEnvNames, ...limits };
 }
 
 export function loadConfig(file: string): Config {

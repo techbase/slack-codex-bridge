@@ -1,3 +1,4 @@
+import { humanMessage, type HumanMessageResult } from './human-message.js';
 import { ModelFailure, type Model } from './codex.js';
 import type { Config } from './config.js';
 import { sendText, type SlackSender } from './output.js';
@@ -246,6 +247,7 @@ export class Bridge {
     const { job, controller } = active;
     const stopTimeout = this.config.turnTimeoutMs === 0 ? () => {}
       : this.clock.timer(() => { active.reason ??= 'timed_out'; controller.abort(); }, this.config.turnTimeoutMs);
+    let extension: HumanMessageResult | undefined;
     let answer = '';
     let failure: string | undefined;
     const turnSender = new TurnSender(this.config, job, this.store, this.sender, this.secrets, controller.signal);
@@ -265,7 +267,15 @@ export class Bridge {
         for (const secret of this.secrets) if (secret) text = text.split(secret).join('[redacted]');
         parentContext = { ...parentContext, text };
       }
-      answer = await this.model.run({ project: job.project, prompt: job.prompt!, parentContext, threadId: this.store.thread(job), signal: controller.signal,
+      extension = this.config.humanMessageCommand ? await humanMessage(this.config.humanMessageCommand, job, parentContext, controller.signal) : undefined;
+      controller.signal.throwIfAborted();
+      let extensionContext = extension?.context;
+      if (extensionContext !== undefined) {
+        let value = JSON.stringify(extensionContext);
+        for (const secret of this.secrets) if (secret) value = value.split(secret).join('[redacted]');
+        extensionContext = JSON.parse(value);
+      }
+      answer = extension?.handled ? extension.response! : await this.model.run({ project: job.project, prompt: job.prompt!, parentContext, extensionContext, threadId: this.store.thread(job), signal: controller.signal,
         onThread: id => this.store.saveThread(job, id, this.clock.now()), sendMessage: turnSender.send,
         interact: (prompt, signal) => this.interaction(job, prompt, signal) });
       if (!turnSender.attempted && (typeof answer !== 'string' || !answer.trim())) failure = 'invalid_result';
@@ -288,6 +298,10 @@ export class Bridge {
     if (!turnSender.attempted || state !== 'completed') {
       const partial = turnSender.attempted ? '\n\nEarlier messages may describe unfinished work. Check actual results before retrying.' : '';
       await this.deliver(job, output + partial);
+      if (extension?.handled && extension.receipt && this.config.humanMessageCommand && !controller.signal.aborted) {
+        try { await humanMessage(this.config.humanMessageCommand, job, undefined, controller.signal, { receipt: extension.receipt, delivered: this.store.job(job.id)?.delivery === 'sent' }); }
+        catch { this.diagnostic('human_hook_delivery_unconfirmed', job.id); }
+      }
     }
   }
 

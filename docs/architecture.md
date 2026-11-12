@@ -104,3 +104,20 @@ responding to or granting any native approval. Only the requester or an operator
 may interrupt the wait. With several approval prompts, explicit controls still
 require an ID; ordinary conversation withdraws the blocked turn. Native question
 and form input remains validated rather than treated as a follow-up.
+
+## Human message extension contract
+
+Private configuration may set `humanMessageCommand` to fixed absolute argv.
+Bridge sends JSON `{version:1,phase:"message",eventId,messageTs,team,channel,root,actor,project,text,parent?}`
+on stdin. The child returns `{handled:boolean,response?:string,context?:unknown,receipt?:string}`.
+Handled responses require nonempty text; unhandled results may add JSON-framed
+untrusted model context. Native prompt responses and deterministic controls
+bypass the extension. Input text never selects its executable or arguments.
+
+A handled response with a receipt receives a second call carrying the same
+accepted event plus `phase:"delivery",receipt,delivered:boolean`. A positive
+acknowledgement means all response chunks were confirmed. Uncertain/partial
+delivery must not authorize an unshown proposal. Acknowledgement errors are
+safely diagnosed without changing the delivered job result or retrying effects.
+The child has a 20-second bound and 64,000-character output cap; cancellation
+kills/reaps its process group. State belongs to the configured extension.

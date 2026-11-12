@@ -31,3 +31,12 @@ withdrawn prompt IDs, duplicate events, requester/operator boundaries, multiple
 approvals, input/form validation and failure before follow-up admission. Prior
 process exit remains required before the next model turn starts. No live Slack
 message, real approval or owning-project action is part of these tests.
+
+## Authenticated human extension
+
+Native staged npm ci, typecheck/build and all 103 tests pass, including callback
+receipts, conditional model bypass, admission/FIFO, cancellation/process cleanup,
+Unicode pipe boundaries, invalid/oversized output, redaction, event deduplication
+and uncertain acknowledgement behavior. Dependency audit reports zero
+vulnerabilities. Existing native approval controls remain unchanged. These
+checks use local fixtures and no live Slack message or product action.
