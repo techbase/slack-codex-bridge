@@ -92,3 +92,17 @@ MCP client/server, stubbed Slack APIs and no-model probes of the pinned CLI.
 These fixture checks do not verify live Slack delivery, provider authentication,
 model behavior or host/container sandbox enforcement. Optional Docker packaging
 has **not been built or run**; see [setup](docs/setup.md) for its verification limits.
+
+Replies to this bot’s messages include the exact parent text as bounded,
+untrusted reference, including bot posts created outside a saved Codex session.
+The authenticated human request stays separate. This lets “Approved” refer to
+an unambiguous proposal without adding an action dispatcher. Several proposals,
+truncated text, unreadable parents or edits after the reply remain explicit
+ambiguities; owning request/scope checks and native approval controls still apply.
+No attachment contents or other authors’ root messages are fetched into context.
+
+State schema 2 adds a reply timestamp while preserving saved sessions and jobs.
+For a binary rollback to schema-1 code, stop Bridge while idle, set only
+`PRAGMA user_version=1` on its private database and retain the extra column.
+Older code ignores the additive column. Do not remove the database or reset
+sessions, and never automatically replay interrupted or uncertain work.

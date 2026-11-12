@@ -11,7 +11,7 @@ For native prompts, Bridge transports an opaque harness-owned parser/result.
 The harness adapter determines the response shape; Bridge checks the Slack
 requester/operator and conversation scope. Replies resolve pending prompts rather
 than starting new turns. Prompt IDs are ephemeral, single-use and cancelled with
-their native request or turn. Existing SQLite job/session state remains unchanged.
+their native request or turn. SQLite schema 2 adds the accepted Slack message timestamp to each job; existing job/session identities are preserved.
 
 ```text
 Slack Socket Mode (official Bolt)
@@ -36,6 +36,8 @@ events and stale envelopes. File contents, filenames and download URLs are not
 forwarded or fetched. Messages with files queue their text with an explicit
 attachment notice; attachment-only messages receive a text-request reply without
 starting the CLI. The CLI context also explains this text-only transport limit.
+Replies carry their accepted Slack timestamp through the durable queue. Immediately before a model turn, Bridge reads only the exact own-bot parent in the already authorized incoming channel. The bounded, text-only parent is passed as untrusted historical reference separately from the human request, for both transports. Root edits after the reply, truncation and unavailable reads are explicit. Other authors and attachment contents are excluded; known secrets are redacted. Reads do not reorder admission or grant a native approval. Cancellation prevents a pending root read from starting a model turn; SDK HTTP settlement remains bounded by its existing timeout. Deterministic controls and native prompt responses bypass the context read.
+
 Ordinary requests are admitted without a queue reply. The optional attachment
 notice must be delivered before execution; an uncertain notice prevents execution.
 The existing SQLite `ack` column records this notice as pending, sent, uncertain

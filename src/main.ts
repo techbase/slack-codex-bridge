@@ -4,7 +4,7 @@ import { CodexModel } from './codex.js';
 import { AppServerModel } from './app-server.js';
 import { loadConfig, secretsFromEnvironment, SetupError } from './config.js';
 import { doctor } from './doctor.js';
-import { appOptions, slackSender, verifySlackIdentity, wireSlack } from './slack.js';
+import { appOptions, slackSender, slackParentReader, verifySlackIdentity, wireSlack } from './slack.js';
 import { Store } from './store.js';
 
 function diagnostics(): Diagnostic {
@@ -51,7 +51,7 @@ async function main(): Promise<void> {
     bridge = new Bridge(config, store, model, slackSender(app), secretsFromEnvironment(config), diagnostic, systemClock, () => {
       process.exitCode = 1;
       void shutdown().catch(() => { diagnostic('shutdown_failed'); });
-    });
+    }, slackParentReader(app, config));
     wireSlack(app, bridge, diagnostic);
     for (const signal of ['SIGINT', 'SIGTERM'] as const) {
       process.once(signal, () => { void shutdown().catch(() => { diagnostic('shutdown_failed'); process.exitCode = 1; }); });

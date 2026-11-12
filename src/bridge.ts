@@ -5,6 +5,7 @@ import { Store, type Job, type Scope } from './store.js';
 import { TurnSender } from './send.js';
 import { randomBytes } from 'node:crypto';
 import type { Interaction } from './interaction.js';
+import type { ParentContext, ParentReader } from './parent-context.js';
 
 export interface Clock {
   now(): number;
@@ -15,7 +16,7 @@ export const systemClock: Clock = {
   timer(callback, ms) { const timer = setTimeout(callback, ms); return () => clearTimeout(timer); },
 };
 export type Diagnostic = (reason: string, jobId?: string) => void;
-type Routed = Scope & { user: string; eventId: string; prompt: string; hasFiles: boolean };
+type Routed = Scope & { user: string; eventId: string; prompt: string; hasFiles: boolean; messageTs: string };
 
 function object(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
@@ -42,7 +43,7 @@ export function route(config: Config, value: unknown, now: number): Routed | und
       || typeof text !== 'string' || (config.mentionOnly && !text.includes(`<@${config.botUserId}>`))) return;
   const prompt = text.replaceAll(`<@${config.botUserId}>`, '').trim();
   return { team: config.teamId, channel: event.channel, root: (event.thread_ts as string | undefined) ?? event.ts,
-    project: config.codex.cwd, user: event.user, eventId: body.event_id, prompt, hasFiles };
+    project: config.codex.cwd, user: event.user, eventId: body.event_id, prompt, hasFiles, messageTs: event.ts };
 }
 
 const HELP = 'Send a message to start or continue a Codex CLI conversation in this thread (mention Bridge if mention-only mode is configured). Codex uses the operator’s existing permissions and preset. Use help, status, or cancel. In app-server mode, reply to native prompts with approve ID, deny ID, or answer ID your answer. Only the requester or a configured operator may answer prompts or cancel a request.';
@@ -65,6 +66,7 @@ export class Bridge {
     private diagnostic: Diagnostic = () => {},
     private clock: Clock = systemClock,
     private onFatal: () => void = () => {},
+    private parentReader?: ParentReader,
   ) {}
 
   start(): void { this.maintain(); }
@@ -104,7 +106,7 @@ export class Bridge {
       await this.reply(routed, `Request too long. Limit: ${this.config.maxInputChars} characters. Nothing was queued.`);
       return;
     }
-    const job = this.store.enqueue(routed, routed.eventId, routed.user, routed.prompt, this.clock.now());
+    const job = this.store.enqueue(routed, routed.eventId, routed.user, routed.prompt, this.clock.now(), routed.messageTs);
     if (!job) { await this.reply(routed, 'Bridge is busy; the queue is full. Nothing was queued. Please ask again later.'); return; }
     const sent = routed.hasFiles
       ? await this.reply(job, 'Attachments were not sent to Codex; this request contains text only.')
@@ -231,7 +233,21 @@ export class Bridge {
     const turnSender = new TurnSender(this.config, job, this.store, this.sender, this.secrets, controller.signal);
     try {
       this.store.touchThread(job, this.clock.now());
-      answer = await this.model.run({ project: job.project, prompt: job.prompt!, threadId: this.store.thread(job), signal: controller.signal,
+      let parentContext: ParentContext | undefined;
+      if (this.parentReader && job.message_ts && job.message_ts !== job.root) {
+        try { parentContext = await this.parentReader(job, job.message_ts, controller.signal); }
+        catch {
+          controller.signal.throwIfAborted();
+          parentContext = { parentTs: job.root, replyTs: job.message_ts, status: 'unavailable' };
+        }
+      }
+      controller.signal.throwIfAborted();
+      if (parentContext?.text) {
+        let text = parentContext.text;
+        for (const secret of this.secrets) if (secret) text = text.split(secret).join('[redacted]');
+        parentContext = { ...parentContext, text };
+      }
+      answer = await this.model.run({ project: job.project, prompt: job.prompt!, parentContext, threadId: this.store.thread(job), signal: controller.signal,
         onThread: id => this.store.saveThread(job, id, this.clock.now()), sendMessage: turnSender.send,
         interact: (prompt, signal) => this.interaction(job, prompt, signal) });
       if (!turnSender.attempted && (typeof answer !== 'string' || !answer.trim())) failure = 'invalid_result';

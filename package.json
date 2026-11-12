@@ -16,10 +16,10 @@
     "doctor": "node dist/src/main.js doctor"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.31.0",
+    "@modelcontextprotocol/sdk": "1.32.2",
     "@openai/codex": "0.159.3",
     "@slack/bolt": "5.1.0",
-    "zod": "4.6.5"
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@types/node": "24.0.0",
