@@ -16,6 +16,7 @@ export const systemClock: Clock = {
   timer(callback, ms) { const timer = setTimeout(callback, ms); return () => clearTimeout(timer); },
 };
 export type Diagnostic = (reason: string, jobId?: string) => void;
+type ActiveTurn = { job: Job; controller: AbortController; done: Promise<void>; reason?: 'cancelled' | 'timed_out' | 'interrupted'; followup?: boolean };
 type Routed = Scope & { user: string; eventId: string; prompt: string; hasFiles: boolean; messageTs: string };
 
 function object(value: unknown): Record<string, unknown> | undefined {
@@ -46,11 +47,11 @@ export function route(config: Config, value: unknown, now: number): Routed | und
     project: config.codex.cwd, user: event.user, eventId: body.event_id, prompt, hasFiles, messageTs: event.ts };
 }
 
-const HELP = 'Send a message to start or continue a Codex CLI conversation in this thread (mention Bridge if mention-only mode is configured). Codex uses the operator’s existing permissions and preset. Use help, status, or cancel. In app-server mode, reply to native prompts with approve ID, deny ID, or answer ID your answer. Only the requester or a configured operator may answer prompts or cancel a request.';
+const HELP = 'Send a message to start or continue a Codex CLI conversation in this thread (mention Bridge if mention-only mode is configured). Codex uses the operator’s existing permissions and preset. Use help, status, or cancel. In app-server mode, reply to native prompts with approve ID, deny ID, or answer ID your answer. An ordinary follow-up while approval is waiting withdraws that wait and continues the same chat without granting permission. Questions and forms still accept their requested input. Only the requester or a configured operator may answer prompts, interrupt an approval wait or cancel a request.';
 
 export class Bridge {
   private closing = false;
-  private active = new Map<string, { job: Job; controller: AbortController; done: Promise<void>; reason?: 'cancelled' | 'timed_out' | 'interrupted' }>();
+  private active = new Map<string, ActiveTurn>();
   private handlers = new Set<Promise<void>>();
   private background = new Set<Promise<void>>();
   private stopMaintenance?: () => void;
@@ -96,12 +97,22 @@ export class Bridge {
     if (/^(approve|deny|answer)\s+[a-f0-9]{24}(\s|$)/i.test(routed.prompt)) { await this.answerInteraction(routed); return; }
     const prompts = [...this.interactions.entries()].filter(([, p]) => !p.signal.aborted && p.job.team === routed.team
       && p.job.channel === routed.channel && p.job.root === routed.root && p.job.project === routed.project);
-    if (prompts.length === 1) {
-      const action = command === 'approve' || command === 'deny' ? command : 'answer';
+    const promptControl = command === 'approve' || command === 'deny';
+    if (prompts.length === 1 && (promptControl || prompts[0]![1].prompt.kind === 'input')) {
+      const action = promptControl ? command : 'answer';
       await this.answerInteraction({ ...routed, prompt: `${action} ${prompts[0]![0]}${action === 'answer' ? ' ' + routed.prompt : ''}` });
       return;
     }
-    if (prompts.length > 1) { await this.reply(routed, 'Several native prompts are waiting in this thread. Include the prompt ID in your response.'); return; }
+    if (prompts.length > 1 && (promptControl || prompts.some(([, p]) => p.prompt.kind === 'input'))) {
+      await this.reply(routed, 'Several native prompts are waiting in this thread. Include the prompt ID in your response.'); return;
+    }
+    // Ordinary conversation can withdraw an approval wait, but cannot grant it.
+    // Keep the blocked turn alive until the follow-up is durably admitted.
+    const waiting = prompts[0]?.[1];
+    if (waiting && routed.user !== waiting.job.user && !this.config.operatorUserIds.includes(routed.user)) {
+      await this.reply(routed, 'Only the requester or a configured operator may interrupt this approval wait.'); return;
+    }
+    const interrupted = waiting ? this.active.get(routed.project) : undefined;
     if (routed.prompt.length > this.config.maxInputChars) {
       await this.reply(routed, `Request too long. Limit: ${this.config.maxInputChars} characters. Nothing was queued.`);
       return;
@@ -121,6 +132,13 @@ export class Bridge {
       return;
     }
     if (this.closing) return;
+    if (interrupted && !interrupted.reason && interrupted.job.id === waiting?.job.id
+        && this.active.get(routed.project) === interrupted
+        && [...this.interactions.values()].some(p => p.job.id === interrupted.job.id && p.prompt.kind === 'approval' && !p.signal.aborted)) {
+      interrupted.followup = true;
+      interrupted.reason = 'interrupted';
+      interrupted.controller.abort();
+    }
     this.pump();
   }
 
@@ -211,7 +229,7 @@ export class Bridge {
       if (awaitingNotice.has(job.project)) continue;
       if (this.active.has(job.project) || this.active.size >= 1) continue;
       this.store.activate(job.id, this.clock.now());
-      const active = { job, controller: new AbortController(), done: Promise.resolve() } as { job: Job; controller: AbortController; done: Promise<void>; reason?: 'cancelled' | 'timed_out' | 'interrupted' };
+      const active = { job, controller: new AbortController(), done: Promise.resolve() } as ActiveTurn;
       this.active.set(job.project, active);
       active.done = this.execute(active).catch(() => {
         // Unexpected persistence failures stop admission. Recovery handles any
@@ -224,7 +242,7 @@ export class Bridge {
     }
   }
 
-  private async execute(active: { job: Job; controller: AbortController; reason?: 'cancelled' | 'timed_out' | 'interrupted' }): Promise<void> {
+  private async execute(active: ActiveTurn): Promise<void> {
     const { job, controller } = active;
     const stopTimeout = this.config.turnTimeoutMs === 0 ? () => {}
       : this.clock.timer(() => { active.reason ??= 'timed_out'; controller.abort(); }, this.config.turnTimeoutMs);
@@ -255,13 +273,15 @@ export class Bridge {
       failure = error instanceof ModelFailure ? error.reason : 'model_failed';
     } finally { await turnSender.settled(); stopTimeout(); }
     const state = active.reason ?? (failure ? 'failed' : 'completed');
-    this.store.finish(job.id, state, failure ?? active.reason ?? null, this.clock.now());
+    this.store.finish(job.id, state, active.followup ? 'followup' : failure ?? active.reason ?? null, this.clock.now());
     this.store.touchThread(job, this.clock.now());
     if (failure && !active.reason) this.diagnostic(failure, job.id);
     const output = state === 'completed' ? `Completed request ${job.id}.\n\n${answer}`
       : state === 'cancelled' ? `Request ${job.id} cancelled. No automatic retry.`
       : state === 'timed_out' ? `Request ${job.id} timed out and was stopped. Send another message to retry explicitly.`
-      : state === 'interrupted' ? `Request ${job.id} interrupted by shutdown. It will not be replayed.`
+      : state === 'interrupted' ? (active.followup
+        ? 'Paused the waiting turn to read your follow-up. The pending approval was withdrawn; no permission was granted. Continuing in this conversation.'
+        : `Request ${job.id} interrupted by shutdown. It will not be replayed.`)
       : `Request ${job.id} failed (${failure}). Codex did not finish this turn. An operator can check the safe diagnostic ID; no automatic retry.`;
     // Suppress duplicate successful answers, but an earlier progress send must
     // not hide a later failure, timeout, cancellation or shutdown.

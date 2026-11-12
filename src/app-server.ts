@@ -123,7 +123,7 @@ export class AppServer {
 }
 
 function approval(text: string, accepted: unknown, declined: unknown): Interaction {
-  return { text, instructions: 'Reply `approve` or `deny` in this thread. With several pending prompts, use `approve ID` or `deny ID`. This grants only the scope shown above.',
+  return { kind: 'approval', text, instructions: 'Reply `approve` or `deny` in this thread. With several pending prompts, use `approve ID` or `deny ID`. This grants only the scope shown above.',
     parse: action => action === 'approve' ? accepted : action === 'deny' ? declined : undefined };
 }
 
@@ -159,7 +159,7 @@ async function nativePrompt(method: string, params: Json, item: Json | undefined
       if (question.isSecret) throw new ModelFailure('unsupported_interaction'); // Never ask for credentials in Slack.
       const options = Array.isArray(question.options) ? question.options : [];
       const labels = options.map(option => { if (!object(option) || typeof option.label !== 'string') throw new ModelFailure('invalid_result'); return option.label; });
-      const response = await interact(request, { text: '*Codex asks*\n' + question.question + (options.length ? '\n\n' + options.map((o, i) => `${i + 1}. ${o.label}${o.description ? ': ' + o.description : ''}`).join('\n') : ''),
+      const response = await interact(request, { kind: 'input', text: '*Codex asks*\n' + question.question + (options.length ? '\n\n' + options.map((o, i) => `${i + 1}. ${o.label}${o.description ? ': ' + o.description : ''}`).join('\n') : ''),
         instructions: 'Reply with your answer (or an option number) in this thread. With several pending prompts, use `answer ID your answer`.',
         parse: (action, text) => {
           if (action === 'deny') return { answers: [] };
@@ -179,7 +179,7 @@ async function nativePrompt(method: string, params: Json, item: Json | undefined
       { action: 'accept', content: null, _meta: null }, declined), signal);
     if (['form', 'openai/form', 'openaiForm'].includes(params.mode) && object(params.requestedSchema)) {
       const validate = new AjvJsonSchemaValidator().getValidator(params.requestedSchema);
-      return interact(request, { text: `*${params.serverName} requests input*\n${params.message}\n\nRequested JSON fields:\n${JSON.stringify(params.requestedSchema, null, 2)}`,
+      return interact(request, { kind: 'input', text: `*${params.serverName} requests input*\n${params.message}\n\nRequested JSON fields:\n${JSON.stringify(params.requestedSchema, null, 2)}`,
         instructions: 'Reply with the requested JSON object, or `deny`, in this thread. With several pending prompts, use `answer ID {"field":"value"}` or `deny ID`. Keep credentials out of Slack.',
         parse: (action, text) => {
           if (action === 'deny') return declined;

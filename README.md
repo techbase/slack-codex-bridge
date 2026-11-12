@@ -106,3 +106,11 @@ For a binary rollback to schema-1 code, stop Bridge while idle, set only
 `PRAGMA user_version=1` on its private database and retain the extra column.
 Older code ignores the additive column. Do not remove the database or reset
 sessions, and never automatically replay interrupted or uncertain work.
+
+While a native approval is waiting, an ordinary follow-up from its requester or
+a configured operator withdraws the blocked turn and continues the same saved
+conversation. It never grants the pending permission. Bridge first admits the
+follow-up durably, waits for the prior child to exit, then preserves normal queue
+order. An oversized request, full queue or uncertain attachment notice leaves
+the approval wait intact. Explicit approval/denial and native question/form
+answers keep their existing validation. Withdrawn prompt IDs cannot be reused.
