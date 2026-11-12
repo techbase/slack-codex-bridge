@@ -21,3 +21,13 @@ non-executing fictional parent proposal and identified the correct proposal.
 It requested no additional approval and performed no real project action. Its
 reply was captured rather than sent to Slack, and its owned chat was archived.
 Production Socket Mode reply delivery after rollout is a distinct check.
+
+## Conversation during a pending approval
+
+Native macOS qualification passes npm ci, typecheck/build, all 78 tests and a
+zero-vulnerability dependency audit. Regression cases use native protocol
+fixtures for command/file/permission/URL approvals, same-session continuation,
+withdrawn prompt IDs, duplicate events, requester/operator boundaries, multiple
+approvals, input/form validation and failure before follow-up admission. Prior
+process exit remains required before the next model turn starts. No live Slack
+message, real approval or owning-project action is part of these tests.

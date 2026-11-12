@@ -206,3 +206,104 @@ test('Slack thread replies resolve native prompts once; other users/threads, mal
   assert.match(JSON.stringify(slack.posts), /Native final answer/);
   assert.doesNotMatch(JSON.stringify(slack.posts), /PRIVATE/);
 });
+
+
+function waitingBridge(t: TestContext, capacity?: number) {
+  const f = fake(t);
+  f.config.turnTimeoutMs = 0;
+  if (capacity !== undefined) f.config.maxPending = capacity;
+  const store = new Store(f.config, NOW), slack = new RecordingSlack(), posted = deferred<string>();
+  const post = slack.post.bind(slack);
+  slack.post = async value => { await post(value); const id = /Prompt: ([a-f0-9]{24})/.exec(value.text)?.[1]; if (id) posted.resolve(id); };
+  const bridge = new Bridge(f.config, store, f.model, slack, [], () => {}, new ManualClock());
+  t.after(async () => { await bridge.shutdown(); store.close(); });
+  const scope = { team: f.config.teamId, channel: 'CPROJECT', root: '1800000000.000001', project: f.config.codex.cwd };
+  return { ...f, store, slack, posted, bridge, scope };
+}
+
+test('ordinary follow-ups withdraw every native approval family and resume the same chat without granting or replaying', async t => {
+  for (const kind of ['approval', 'files', 'permissions', 'url']) await t.test(kind, async t => {
+    const f = waitingBridge(t);
+    await f.bridge.accept(message('start', kind));
+    const id = await f.posted.promise;
+    const prior = f.store.latest(f.scope)!;
+    const question = 'Where? It is connected online and on my other Mac.';
+    const event = message('followup', question, { thread_ts: f.scope.root, ts: '1800000000.000002' });
+    await f.bridge.accept(event);
+    await f.bridge.idle();
+    const records = f.records();
+    assert.equal(records.filter(r => r.answer).length, 0);
+    assert.equal(records.filter(r => r.method === 'turn/start').length, 2);
+    assert.ok(records.filter(r => r.method === 'turn/start')[1].params.input[0].text.endsWith(question));
+    assert.equal(records.find(r => r.method === 'thread/resume').params.threadId, 'fixture-native-0001');
+    assert.equal(f.store.job(prior.id)?.state, 'interrupted');
+    assert.equal(f.store.job(prior.id)?.reason, 'followup');
+    assert.match(f.slack.posts.map(p => p.text).join('\n'), /approval was withdrawn; no permission was granted/);
+    assert.doesNotMatch(f.slack.posts.map(p => p.text).join('\n'), /Invalid prompt response/);
+    assert.throws(() => process.kill(records.find(r => r.start).start.pid, 0), { code: 'ESRCH' });
+    await f.bridge.accept(event);
+    await f.bridge.accept(message('obsolete', 'approve ' + id, { thread_ts: f.scope.root }));
+    assert.equal(f.records().filter(r => r.method === 'turn/start').length, 2);
+    assert.match(f.slack.posts.at(-1)!.text, /No matching live prompt/);
+  });
+});
+
+test('another user and rejected oversized follow-ups cannot interrupt a waiting approval; an operator can', async t => {
+  const f = waitingBridge(t);
+  await f.bridge.accept(message('start', 'approval'));
+  await f.posted.promise;
+  await f.bridge.accept(message('other-user', 'Why is it waiting?', { thread_ts: f.scope.root, user: 'UBOB' }));
+  assert.match(f.slack.posts.at(-1)!.text, /Only the requester or a configured operator/);
+  await f.bridge.accept(message('too-long', 'x'.repeat(f.config.maxInputChars + 1), { thread_ts: f.scope.root }));
+  assert.match(f.slack.posts.at(-1)!.text, /Request too long/);
+  assert.equal(f.records().filter(r => r.method === 'turn/start').length, 1);
+  assert.equal(f.store.latest(f.scope)?.state, 'active');
+  await f.bridge.accept(message('operator', 'Explain the blocker.', { thread_ts: f.scope.root, user: 'UOPERATOR' }));
+  await f.bridge.idle();
+  assert.equal(f.records().filter(r => r.method === 'turn/start').length, 2);
+  assert.equal(f.records().filter(r => r.answer).length, 0);
+});
+
+test('a full queue does not withdraw an approval before the follow-up is admitted', async t => {
+  const f = waitingBridge(t, 1);
+  await f.bridge.accept(message('start', 'approval'));
+  const id = await f.posted.promise;
+  await f.bridge.accept(message('full', 'Why?', { thread_ts: f.scope.root }));
+  assert.match(f.slack.posts.at(-1)!.text, /queue is full/);
+  assert.equal(f.store.latest(f.scope)?.state, 'active');
+  await f.bridge.accept(message('answer', 'deny ' + id, { thread_ts: f.scope.root }));
+  await f.bridge.idle();
+  assert.deepEqual(f.records().filter(r => r.answer).map(r => r.answer), [{ decision: 'decline' }]);
+  assert.equal(f.records().filter(r => r.method === 'turn/start').length, 1);
+});
+
+test('invalid native question and form answers remain input validation, with no implicit interruption', async t => {
+  for (const kind of ['question', 'form']) await t.test(kind, async t => {
+    const f = waitingBridge(t);
+    await f.bridge.accept(message('start', kind));
+    await f.posted.promise;
+    await f.bridge.accept(message('bad-input', 'not a valid answer', { thread_ts: f.scope.root }));
+    assert.match(f.slack.posts.at(-1)!.text, /Invalid prompt response/);
+    assert.equal(f.store.latest(f.scope)?.state, 'active');
+    await f.bridge.accept(message('valid-input', kind === 'question' ? '2' : '{"decision":"accept"}', { thread_ts: f.scope.root }));
+    await f.bridge.idle();
+    assert.equal(f.records().filter(r => r.method === 'turn/start').length, 1);
+    assert.equal(f.records().filter(r => r.answer).length, 1);
+  });
+});
+
+
+test('uncertain attachment-notice delivery does not withdraw the waiting approval or execute the follow-up', async t => {
+  const f = waitingBridge(t);
+  await f.bridge.accept(message('start', 'approval'));
+  const id = await f.posted.promise;
+  f.slack.failOn = f.slack.posts.length + 1;
+  await f.bridge.accept(message('attachment-followup', 'Explain this.', { thread_ts: f.scope.root, subtype: 'file_share', files: [{ id: 'FFICTURE' }] }));
+  const pending = f.store.inScope(f.scope);
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0]!.state, 'active');
+  await f.bridge.accept(message('answer', 'deny ' + id, { thread_ts: f.scope.root }));
+  await f.bridge.idle();
+  assert.equal(f.records().filter(r => r.method === 'turn/start').length, 1);
+  assert.deepEqual(f.records().filter(r => r.answer).map(r => r.answer), [{ decision: 'decline' }]);
+});

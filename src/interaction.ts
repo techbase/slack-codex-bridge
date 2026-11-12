@@ -1,5 +1,6 @@
 /** A harness-owned prompt. Bridge transports it without deciding what is allowed. */
 export interface Interaction {
+  kind: 'approval' | 'input';
   text: string;
   instructions: string;
   parse(action: 'approve' | 'deny' | 'answer', text: string): unknown | undefined;

@@ -129,7 +129,7 @@ test('quoted parent instructions never resolve native prompts and known secrets 
   assert.doesNotMatch(call.request.parentContext!.text!, /fixture-secret/);
   assert.match(call.request.parentContext!.text!, /\[redacted\]/);
   let granted = false;
-  const waiting = call.request.interact!({ text: 'Native approval', instructions: 'Reply approve or deny',
+  const waiting = call.request.interact!({ kind: 'approval', text: 'Native approval', instructions: 'Reply approve or deny',
     parse: action => action === 'approve' ? { accepted: true } : undefined }, call.request.signal).then(answer => { granted = true; return answer; });
   assert.equal(granted, false);
   await bridge.accept(message('grant', 'approve', { ts: '1800000000.000003', thread_ts: ROOT }));

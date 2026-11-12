@@ -96,3 +96,11 @@ MCP listing without a model or Slack call. `src/main.ts` owns startup, identity
 verification, bounded safe diagnostics and awaited shutdown. There is no custom UI
 or browser journey. Node 24.16+ on macOS/Linux and CLI 0.159.3 are the release
 contract; Docker remains an optional, explicitly unverified example in this change.
+
+Native interactions declare whether they require approval or typed input. A
+normal conversational follow-up during an approval wait is queued before
+interrupting that turn. It resumes the same session after child exit, without
+responding to or granting any native approval. Only the requester or an operator
+may interrupt the wait. With several approval prompts, explicit controls still
+require an ID; ordinary conversation withdraws the blocked turn. Native question
+and form input remains validated rather than treated as a follow-up.

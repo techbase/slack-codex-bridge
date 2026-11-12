@@ -45,7 +45,8 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     else if (['question', 'secret', 'question-key'].includes(prompt)) {
       method = 'item/tool/requestUserInput';
       params.questions = [{ id: prompt === 'question-key' ? '__proto__' : 'choice', question: 'Which option?', isSecret: prompt === 'secret', isOther: false, options: [{ label: 'One', description: 'First' }, { label: 'Two', description: 'Second' }] }];
-    } else if (prompt === 'form') { method = 'mcpServer/elicitation/request'; params.mode = 'form'; params.serverName = 'fixture'; params.message = 'Tool confirmation'; params.requestedSchema = { type: 'object', properties: { decision: { type: 'string', enum: ['accept', 'decline'] } }, required: ['decision'] }; }
+    } else if (prompt === 'url') { method = 'mcpServer/elicitation/request'; params.mode = 'url'; params.serverName = 'fixture'; params.message = 'Complete the fictional connection'; params.url = 'https://example.invalid/connect'; }
+    else if (prompt === 'form') { method = 'mcpServer/elicitation/request'; params.mode = 'form'; params.serverName = 'fixture'; params.message = 'Tool confirmation'; params.requestedSchema = { type: 'object', properties: { decision: { type: 'string', enum: ['accept', 'decline'] } }, required: ['decision'] }; }
     else if (prompt === 'unknown') method = 'item/unrecognized/requestApproval';
     else { finish(prompt === 'failed' ? 'failed' : 'completed'); return; }
     waiting = 41;
