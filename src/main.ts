@@ -1,3 +1,4 @@
+import { readBridgeSnapshot, snapshotInput } from './snapshot.js';
 import { App } from '@slack/bolt';
 import { Bridge, systemClock, type Diagnostic } from './bridge.js';
 import { CodexModel } from './codex.js';
@@ -22,8 +23,13 @@ function diagnostics(): Diagnostic {
 async function main(): Promise<void> {
   process.umask(0o077);
   const command = process.argv[2];
-  if (command !== undefined && command !== 'doctor') throw new SetupError('Usage: npm start, or npm run doctor. Configure BRIDGE_CONFIG.');
+  if (command !== undefined && command !== 'doctor' && command !== 'snapshot') throw new SetupError('Usage: npm start, npm run doctor, or node dist/src/main.js snapshot. Configure BRIDGE_CONFIG.');
   const config = loadConfig(process.env.BRIDGE_CONFIG ?? 'bridge.config.json');
+  if (command === 'snapshot') {
+    try { process.stdout.write(JSON.stringify(readBridgeSnapshot(config, await snapshotInput(), Date.now(), secretsFromEnvironment(config))) + '\n'); }
+    catch (error) { throw new SetupError(error instanceof SetupError ? error.message : 'Bridge snapshot unavailable or invalid request.'); }
+    return;
+  }
   const checks = await doctor(config);
   if (command === 'doctor') {
     for (const check of checks) process.stdout.write(`${check.ok ? 'OK' : 'MISSING'} ${check.check}: ${check.detail}\n`);

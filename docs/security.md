@@ -49,7 +49,11 @@ child/sender settlement. It cannot roll back work, guarantee termination of a to
 that deliberately detaches itself, or retract an already accepted send. MCP sends
 are bounded and stop after uncertain delivery. Neither provider errors nor raw
 stderr are printed; logs contain bounded fixed reason codes and generated job IDs.
-There are no automatic model retries, send retries or restart replays.
+There are no automatic model retries, send retries or replays of started work.
+Acknowledged unstarted requests survive restart as queued admission; pending or
+uncertain attachment notices cannot grant dispatch. Queue age alone never drops
+an accepted request. Bound concurrency per conversation does not add an OS
+isolation guarantee; native CLI permissions remain consequential.
 
 The optional app-server transport relays native approvals and questions without
 making authorization decisions. Replies are bound to the active turn, originating

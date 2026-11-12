@@ -160,11 +160,12 @@ edits Codex session files or chooses the global last session.
 
 | Setting | Default | Meaning |
 | --- | ---: | --- |
-| `maxPending` | 20 | Queued plus active requests; one CLI turn at a time |
+| `maxPending` | 20 | Total queued plus active requests |
+| `maxConcurrentTurns` | 4 | Independent conversation lanes, 1–16; each native chat stays serial |
 | `maxInputChars` | 12,000 | Incoming prompt limit in UTF-16 units |
 | `maxOutputChars` | 24,000 | Final fallback budget; total tool text budget per turn |
 | `turnTimeoutMs` | 300,000 | CLI turn deadline, including waiting for human input; `0` disables it explicitly |
-| `queueTtlMs` | 900,000 | Maximum wait before queued work expires |
+| `queueTtlMs` | 900,000 | Accepted for configuration compatibility; no longer expires admitted work |
 | `retentionMs` | 604,800,000 | Metadata/session/dedup retention (maximum 30 days) |
 | `maxRetainedEvents` | 10,000 | Admission stops at dedup capacity |
 
@@ -204,10 +205,12 @@ occurs. Partial long-answer delivery has the same rule. After a tool send, use
 `status` to see the CLI outcome if it later failed or was cancelled. Asking again
 explicitly is new work and may repeat actions or incur model cost.
 
-On restart, formerly queued and active jobs become `interrupted`; pending/sending
-deliveries become `uncertain`. Recovery sends nothing and never executes old work.
-Follow-ups use the last observed explicit session ID, which may contain a partial
-turn. The existing version-1 SQLite schema is retained. To migrate from the pilot,
+On restart, formerly active jobs become `interrupted` and are never replayed.
+Acknowledged unstarted jobs remain queued; their pending outcome delivery is not
+misclassified as an attempted send. Queued jobs with an uncertain/pending
+attachment notice are interrupted. Recovery sends nothing. Follow-ups use the
+last observed explicit session ID, which may contain a partial turn. Additive
+schema 3 preserves existing identities and stores bounded request/outcome context. To migrate from the pilot,
 stop it, replace old JSON with the new format, and reuse its private state directory
 if you want retained dedup and matching cwd/thread sessions. Its isolated Codex
 sessions are not copied: continuation requires the selected runtime to have the
@@ -215,7 +218,10 @@ saved session. Start a new Slack thread if it does not. Old `codexHome`,
 `hostPolicyReviewed`, `channels` and `maxConcurrentProjects` settings are rejected
 with a migration message; no silent legacy fallback remains.
 
-Terminal prompts are removed immediately; idle cleanup runs at least every minute.
+Terminal execution prompts are removed immediately. Request/outcome summaries
+(up to 4,000 units each), routing and native identities follow retention; explicit
+truncation is exposed. Unfinished jobs retain dedup protection even beyond the
+normal retention age. Idle cleanup runs at least every minute.
 Bridge stores metadata/session IDs, never final answers. SQLite secure deletion
 and WAL checkpointing do not erase filesystem snapshots/backups. Codex, Slack and
 the model provider retain their own data independently; Bridge does not delete it.

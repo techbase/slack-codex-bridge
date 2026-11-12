@@ -170,7 +170,7 @@ test('attachment-only messages explain the text limitation without queuing or re
   assert.match(restricted.slack.posts[0]!.text, /Nothing was queued/);
 });
 
-test('bounded admission serializes the fixed CLI cwd across channels', async t => {
+test('an explicit one-turn concurrency limit serializes independent channels', async t => {
   const { bridge, model, slack } = setup(t, { maxPending: 3 });
   await bridge.accept(message('first'));
   await bridge.accept(message('second', 'Second', { channel: 'CALIAS' }));
@@ -209,28 +209,30 @@ test('requester and operator cancellation is thread-scoped and stops queued/acti
   assert.equal(resumed.request.signal.aborted, true);
 });
 
-test('timeout and queued expiry use controlled time and never overlap a previous turn', async t => {
+test('timeout settles its turn while an accepted queued request survives its old TTL', async t => {
   const { bridge, model, clock, store, scope } = setup(t, { turnTimeoutMs: 1000, queueTtlMs: 1000 });
   await bridge.accept(message('timeout'));
   const timedOutId = store.latest(scope)!.id;
-  await bridge.accept(message('expires'));
+  await bridge.accept(message('waits'));
   clock.advance(1000);
+  const second = await model.started(2);
+  second.result.resolve('Accepted work still runs.');
   await bridge.idle();
-  assert.equal(model.calls.length, 1);
+  assert.equal(model.calls.length, 2);
   assert.equal(model.calls[0]!.request.signal.aborted, true);
   assert.equal(store.job(timedOutId)?.state, 'timed_out');
-  assert.equal(store.latest(scope)?.state, 'interrupted');
+  assert.equal(store.latest(scope)?.state, 'completed');
   await bridge.accept(message('status', 'status'));
 });
 
-test('clean shutdown awaits cancellation, interrupts queued work and stops admission', async t => {
+test('clean shutdown awaits active cancellation, preserves unstarted work and stops admission', async t => {
   const { bridge, model, store, scope, slack } = setup(t);
   await bridge.accept(message('active'));
   await bridge.accept(message('queued'));
   await bridge.shutdown();
   assert.equal(model.calls.length, 1);
   assert.equal(model.calls[0]!.request.signal.aborted, true);
-  assert.equal(store.latest(scope)?.state, 'interrupted');
+  assert.equal(store.latest(scope)?.state, 'queued');
   const before = slack.posts.length;
   await bridge.accept(message('after-shutdown'));
   assert.equal(slack.posts.length, before);
@@ -493,5 +495,129 @@ test('a conversational follow-up withdraws multiple approvals together but bare 
   assert.equal(next.request.threadId, 'fixture-thread-1');
   assert.equal(next.request.prompt, 'Explain these requests.');
   next.result.resolve('Explained.');
+  await bridge.idle();
+});
+
+
+test('independent roots and channels make progress concurrently within the configured bound', async t => {
+  const { bridge, model, store, scope } = setup(t, { maxConcurrentTurns: 2, maxPending: 5, turnTimeoutMs: 0 });
+  await bridge.accept(message('first'));
+  await bridge.accept(message('other-root', 'Independent', { ts: '1800000000.000020' }));
+  await model.started(2);
+  await bridge.accept(message('other-channel', 'Third', { channel: 'CSECOND' }));
+  await bridge.accept(message('followup', 'Same conversation', { ts: '1800000000.000021', thread_ts: scope.root }));
+  assert.equal(model.calls.length, 2);
+  model.calls[1]!.result.resolve('Second lane done.');
+  const third = await model.started(3);
+  assert.equal(third.request.threadId, undefined);
+  third.result.resolve('Third lane done.');
+  // The first lane still owns its native chat and its follow-up cannot overlap.
+  assert.equal(model.calls.length, 3);
+  model.calls[0]!.result.resolve('First lane done.');
+  const fourth = await model.started(4);
+  assert.equal(fourth.request.threadId, 'fixture-thread-1');
+  fourth.result.resolve('Follow-up done.');
+  await bridge.idle();
+  assert.equal(store.unfinished().length, 0);
+});
+
+test('different Slack roots mapped to the same saved native chat never overlap', async t => {
+  const { bridge, model, store, scope } = setup(t, { maxConcurrentTurns: 4 });
+  const other = { ...scope, root: '1800000000.000050' };
+  store.saveThread(scope, 'same-native-chat', NOW);
+  store.saveThread(other, 'same-native-chat', NOW);
+  await bridge.accept(message('first-shared'));
+  await bridge.accept(message('second-shared', 'Follow-up', { ts: other.root }));
+  assert.equal(model.calls.length, 1);
+  model.calls[0]!.result.resolve('First settled.');
+  const second = await model.started(2);
+  assert.equal(second.request.threadId, 'same-native-chat');
+  second.result.resolve('Second settled.');
+  await bridge.idle();
+});
+
+test('cancelling one active lane preserves independent work and queued lane FIFO', async t => {
+  const { bridge, model, store, scope } = setup(t, { maxConcurrentTurns: 2 });
+  await bridge.accept(message('first-lane'));
+  await bridge.accept(message('second-lane', 'Independent', { ts: '1800000000.000060' }));
+  await model.started(2);
+  await bridge.accept(message('cancel-first', 'cancel'));
+  assert.equal(model.calls[0]!.request.signal.aborted, true);
+  assert.equal(model.calls[1]!.request.signal.aborted, false);
+  model.calls[1]!.result.resolve('Independent finished.');
+  await bridge.idle();
+  assert.equal(store.latest(scope)?.state, 'cancelled');
+});
+
+test('outcome proof is distinct from progress delivery and request snapshots retain bounded context', async t => {
+  const { bridge, model, store, scope } = setup(t);
+  await bridge.accept(message('progress-only', 'Explain fixture-secret'));
+  const call = await model.started(1);
+  await call.request.sendMessage({ text: 'Still checking.' });
+  assert.equal(store.latest(scope)?.delivery, 'sent');
+  assert.equal(store.latest(scope)?.final_delivery, 'unknown');
+  call.result.resolve('Native final suppressed because a tool message was already sent.');
+  await bridge.idle();
+  const job = store.latest(scope)!;
+  assert.equal(job.final_delivery, 'unknown');
+  assert.match(job.request_text, /\[redacted\]/);
+  assert.doesNotMatch(job.request_text, /fixture-secret/);
+  assert.equal(job.prompt, null);
+});
+
+test('terminal fallback delivery records final proof only after Slack settles', async t => {
+  const { bridge, model, store, scope } = setup(t);
+  await bridge.accept(message('final-proof'));
+  model.calls[0]!.result.resolve('Final answer.');
+  await bridge.idle();
+  assert.equal(store.latest(scope)?.final_delivery, 'sent');
+});
+
+
+test('acknowledged queued requests survive service replacement and get confirmed final delivery once', async t => {
+  const { config } = fixture(t);
+  const scope: Scope = { team: config.teamId, channel: 'CPROJECT', root: '1800000000.000001', project: config.codex.cwd };
+  const first = new Store(config, NOW);
+  first.claimEvent('accepted-before-restart', NOW);
+  const job = first.enqueue(scope, 'accepted-before-restart', 'UALICE', 'Accepted before restart', NOW, scope.root)!;
+  first.acknowledge(job.id, 'skipped'); first.close();
+  const reopened = new Store(config, NOW + config.queueTtlMs + 1);
+  const model = new ControlledModel(), slack = new RecordingSlack(), clock = new ManualClock();
+  clock.time = NOW + config.queueTtlMs + 1;
+  const bridge = new Bridge(config, reopened, model, slack, [], () => {}, clock);
+  t.after(async () => { await bridge.shutdown(); reopened.close(); });
+  bridge.start();
+  const call = await model.started(1);
+  call.result.resolve('Newly executed accepted request.');
+  await bridge.idle();
+  assert.equal(reopened.job(job.id)?.state, 'completed');
+  assert.equal(reopened.job(job.id)?.delivery, 'sent');
+  assert.equal(reopened.job(job.id)?.final_delivery, 'sent');
+  await bridge.accept(message('accepted-before-restart'));
+  assert.equal(model.calls.length, 1);
+});
+
+
+test('a pending attachment notice preserves FIFO across roots sharing one native chat', async t => {
+  const { bridge, model, store, slack, scope } = setup(t, { maxConcurrentTurns: 4 });
+  const other = { ...scope, root: '1800000000.000090' };
+  store.saveThread(scope, 'shared-attachment-chat', NOW);
+  store.saveThread(other, 'shared-attachment-chat', NOW);
+  const entered = deferred(), release = deferred();
+  t.after(() => release.resolve());
+  const originalPost = slack.post.bind(slack);
+  let first = true;
+  slack.post = async post => { await originalPost(post); if (first) { first = false; entered.resolve(); await release.promise; } };
+  const admission = bridge.accept(message('attachment-first', 'First with file', { files: [{ id: 'FFIXTURE' }] }));
+  await entered.promise;
+  await bridge.accept(message('shared-later', 'Later in shared chat', { ts: other.root }));
+  assert.equal(model.calls.length, 0);
+  release.resolve(); await admission;
+  const one = await model.started(1);
+  assert.equal(one.request.prompt, 'First with file');
+  one.result.resolve('First done.');
+  const two = await model.started(2);
+  assert.equal(two.request.prompt, 'Later in shared chat');
+  two.result.resolve('Second done.');
   await bridge.idle();
 });

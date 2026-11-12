@@ -10,4 +10,5 @@
     "cwd": "/workspace/project"
   },
   "stateDir": "/var/lib/bridge"
+  "maxConcurrentTurns": 4,
 }

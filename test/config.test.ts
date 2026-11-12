@@ -9,7 +9,7 @@ test('configuration rejects ambiguous routing, obsolete policies, command inject
   const { config, root } = fixture(t);
   for (const invalid of [
     { teamId: '' }, { allowedUserIds: [] }, { incomingChannelIds: [] }, { operatorUserIds: ['UEVE'] },
-    { hostPolicyReviewed: true }, { codexHome: root }, { maxPending: 0 }, { mentionOnly: 'false' },
+    { hostPolicyReviewed: true }, { codexHome: root }, { maxPending: 0 }, { maxConcurrentTurns: 0 }, { maxConcurrentTurns: 17 }, { mentionOnly: 'false' },
     { retentionMs: 60_000, queueTtlMs: 61_000 }, { outgoingChannels: { thread: 'COTHER' } },
     { outgoingChannels: { arbitrary: 'not-an-id' } },
     { codex: { ...config.codex, cwd: 'relative' } },
@@ -47,4 +47,12 @@ test('normal configuration and explicit operator permissions are accepted; cwd i
   assert.equal(parseConfig({ ...config, turnTimeoutMs: 0 }).turnTimeoutMs, 0);
   assert.equal(parseConfig({ ...config, codex: { ...config.codex, transport: 'app-server' } }).codex.transport, 'app-server');
   assert.ok(parseConfig({ ...config, codex: { ...config.codex, args: ['--dangerously-bypass-approvals-and-sandbox'] } }));
+});
+
+
+test('the default permits four independent conversation turns and explicit limits remain bounded', t => {
+  const { config } = fixture(t);
+  const raw: Record<string, unknown> = { ...config }; delete raw.maxConcurrentTurns;
+  assert.equal(parseConfig(raw).maxConcurrentTurns, 4);
+  assert.equal(parseConfig({ ...raw, maxConcurrentTurns: 16 }).maxConcurrentTurns, 16);
 });

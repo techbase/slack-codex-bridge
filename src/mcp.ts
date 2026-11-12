@@ -7,7 +7,7 @@ import type { SendToolApprovalMode } from './config.js';
 
 export const MCP_NAME = 'techbase_bridge';
 export const MCP_ENTRY = fileURLToPath(new URL('./mcp-stdio.js', import.meta.url));
-export const MCP_ENV = ['BRIDGE_SEND_URL', 'BRIDGE_SEND_TOKEN'];
+export const MCP_ENV = ['BRIDGE_SEND_URL', 'BRIDGE_SEND_TOKEN', 'BRIDGE_STATE_URL'];
 
 /** Supported per-invocation Codex TOML override, never an operator file edit. */
 export function mcpOverrides(approvalMode?: SendToolApprovalMode): string[] {
@@ -17,7 +17,7 @@ export function mcpOverrides(approvalMode?: SendToolApprovalMode): string[] {
 }
 
 /** Loopback transport gives the stdio process a turn capability, never Slack tokens. */
-export async function openSender(send: SendMessage): Promise<{ env: Record<string, string>; close(): Promise<void> }> {
+export async function openSender(send: SendMessage, reportState?: SendMessage): Promise<{ env: Record<string, string>; close(): Promise<void> }> {
   const token = randomBytes(32).toString('hex');
   let closing = false;
   const pending = new Set<Promise<void>>();
@@ -27,7 +27,7 @@ export async function openSender(send: SendMessage): Promise<{ env: Record<strin
       res.writeHead(status, { 'content-type': 'application/json', 'connection': 'close' });
       res.end(JSON.stringify(body));
     };
-    if (closing || req.method !== 'POST' || req.url !== '/send' || req.headers.authorization !== `Bearer ${token}`) {
+    if (closing || req.method !== 'POST' || !(req.url === '/send' || req.url === '/state' && reportState) || req.headers.authorization !== `Bearer ${token}`) {
       respond(403, { ok: false, message: 'Sender unavailable.' }); return;
     }
     const task = (async () => {
@@ -42,7 +42,7 @@ export async function openSender(send: SendMessage): Promise<{ env: Record<strin
         try { input = JSON.parse(data); }
         catch { respond(400, { ok: false, message: 'Invalid arguments; nothing sent.' }); return; }
         if (closing) { respond(403, { ok: false, message: 'Sender unavailable.' }); return; }
-        respond(200, await send(input));
+        respond(200, await (req.url === '/state' ? reportState! : send)(input));
       } catch { respond(500, { ok: false, message: 'Delivery is uncertain. Do not retry.' }); }
     })();
     pending.add(task);
@@ -53,7 +53,7 @@ export async function openSender(send: SendMessage): Promise<{ env: Record<strin
     server.listen(0, '127.0.0.1', () => { server.off('error', reject); resolve(); });
   });
   return {
-    env: { BRIDGE_SEND_URL: `http://127.0.0.1:${(server.address() as AddressInfo).port}/send`, BRIDGE_SEND_TOKEN: token },
+    env: { BRIDGE_SEND_URL: `http://127.0.0.1:${(server.address() as AddressInfo).port}/send`, BRIDGE_SEND_TOKEN: token, ...(reportState ? { BRIDGE_STATE_URL: `http://127.0.0.1:${(server.address() as AddressInfo).port}/state` } : {}) },
     async close() {
       closing = true;
       // No new calls after the model settles. Await any admitted Slack send.

@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { isDeepStrictEqual } from 'node:util';
 import { SetupError, type Config } from './config.js';
 import { MCP_NAME, mcpOverrides, openSender } from './mcp.js';
-import type { SendMessage } from './send.js';
+import type { SendMessage, SendResult } from './send.js';
 import type { Interact } from './interaction.js';
 
 export const CODEX_VERSION = '0.159.3';
@@ -12,7 +12,7 @@ export function childEnvironment(env = process.env): Record<string, string> {
   const slackValues = new Set(Object.entries(env).filter(([name]) => /^SLACK_/i.test(name)).map(([, value]) => value).filter(Boolean));
   return Object.fromEntries(Object.entries(env).filter(([name, value]) =>
     value !== undefined && !/^SLACK_/i.test(name) && !slackValues.has(value)
-    && !['BRIDGE_SEND_URL', 'BRIDGE_SEND_TOKEN'].includes(name))) as Record<string, string>;
+    && !['BRIDGE_SEND_URL', 'BRIDGE_SEND_TOKEN', 'BRIDGE_STATE_URL'].includes(name))) as Record<string, string>;
 }
 
 export class ModelFailure extends Error {
@@ -125,13 +125,15 @@ export interface ModelRequest {
   threadId?: string;
   signal: AbortSignal;
   onThread(id: string): void;
+  onTurn?(id: string): void;
+  reportState?(input: unknown): Promise<SendResult>;
   sendMessage: SendMessage;
   interact?: Interact;
 }
 export interface Model { run(request: ModelRequest): Promise<string> }
 
 export function slackContext(config: Config, parent?: ParentContext, extension?: unknown): string {
-  return `This request arrived through Slack Bridge. Bridge forwards message text only; Slack attachment contents are not supplied. If the task depends on an attachment, ask for a description rather than assuming you have seen it. Use the ${MCP_NAME} MCP send_message tool for replies. Format tool messages and final answers using Slack mrkdwn: *bold* for short headings and key names, blank lines between sections, and short bullet lists. Use <https://example.com|descriptive label> for web links, or bare HTTP/HTTPS URLs. Do not use Markdown heading hashes, **bold**, Markdown links, tables or escaped line breaks. Mentions and link previews are disabled. Destination defaults to the originating thread (thread); configured channel aliases: ${Object.keys(config.outgoingChannels).join(', ') || '(none)'}. After any tool send, Bridge does not repeat your final answer. If you do not send through the tool, Bridge posts your final answer in the originating thread. Never retry an uncertain delivery.${parentContextText(parent)}${humanContextText(extension)}\n\nSlack message:\n`;
+  return `This request arrived through Slack Bridge. Bridge forwards message text only; Slack attachment contents are not supplied. If the task depends on an attachment, ask for a description rather than assuming you have seen it. Use the ${MCP_NAME} MCP send_message tool for replies. Use kind: outcome for the final answer to the originating thread and kind: progress for interim updates. A progress send does not confirm delivery of an outcome. If report_state is available, it records operator-extension lifecycle metadata; it sends no Slack reply and grants no permission. Format tool messages and final answers using Slack mrkdwn: *bold* for short headings and key names, blank lines between sections, and short bullet lists. Use <https://example.com|descriptive label> for web links, or bare HTTP/HTTPS URLs. Do not use Markdown heading hashes, **bold**, Markdown links, tables or escaped line breaks. Mentions and link previews are disabled. Destination defaults to the originating thread (thread); configured channel aliases: ${Object.keys(config.outgoingChannels).join(', ') || '(none)'}. After any tool send, Bridge does not repeat your final answer. If you do not send through the tool, Bridge posts your final answer in the originating thread. Never retry an uncertain delivery.${parentContextText(parent)}${humanContextText(extension)}\n\nSlack message:\n`;
 }
 
 export class CodexModel implements Model {
@@ -139,7 +141,7 @@ export class CodexModel implements Model {
 
   async run(request: ModelRequest): Promise<string> {
     request.signal.throwIfAborted();
-    const sender = await openSender(request.sendMessage);
+    const sender = await openSender(request.sendMessage, request.reportState);
     try {
       const args = [...this.config.codex.args, ...mcpOverrides(this.config.codex.sendToolApprovalMode), 'exec', '--json'];
       if (request.threadId) args.push('resume', request.threadId);

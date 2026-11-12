@@ -86,3 +86,42 @@ test('unsupported schema and unsafe state permissions/symlinks fail closed', t =
   symlinkSync(file, path.join(otherState, 'bridge.sqlite'));
   assert.throws(() => new Store({ ...config, stateDir: otherState }, NOW), /private regular files/);
 });
+
+
+test('restart preserves acknowledged queued admission but never replays active or uncertain-notice work', t => {
+  const { config } = fixture(t);
+  const scope: Scope = { team: config.teamId, channel: 'CPROJECT', root: '1800000000.000001', project: config.codex.cwd };
+  const first = new Store(config, NOW);
+  const ready = first.enqueue(scope, 'ready', 'UALICE', 'accepted request', NOW)!;
+  first.acknowledge(ready.id, 'skipped');
+  const attached = first.enqueue(scope, 'attached', 'UALICE', 'accepted attachment request', NOW)!;
+  first.acknowledge(attached.id, 'sent');
+  const uncertain = first.enqueue(scope, 'uncertain', 'UALICE', 'uncertain notice', NOW)!;
+  first.acknowledge(uncertain.id, 'uncertain');
+  const active = first.enqueue(scope, 'executing', 'UALICE', 'active work', NOW)!;
+  first.acknowledge(active.id, 'skipped'); first.activate(active.id, NOW);
+  first.close();
+  const reopened = new Store(config, NOW + config.queueTtlMs + 1);
+  try {
+    assert.deepEqual(reopened.queued().map(job => job.event_id), ['ready', 'attached']);
+    assert.equal(reopened.job(ready.id)?.prompt, 'accepted request');
+    assert.equal(reopened.job(ready.id)?.delivery, 'pending');
+    assert.equal(reopened.job(attached.id)?.delivery, 'pending');
+    assert.equal(reopened.job(uncertain.id)?.reason, 'ack_uncertain');
+    assert.equal(reopened.job(active.id)?.reason, 'restart');
+  } finally { reopened.close(); }
+});
+
+test('long pending work keeps its dedup identity until explicit settlement', t => {
+  const { config } = fixture(t);
+  const store = new Store(config, NOW);
+  const scope: Scope = { team: config.teamId, channel: 'CPROJECT', root: '1800000000.000001', project: config.codex.cwd };
+  try {
+    store.claimEvent('pending', NOW);
+    const job = store.enqueue(scope, 'pending', 'UALICE', 'A long pending request', NOW)!;
+    store.acknowledge(job.id, 'skipped');
+    store.cleanup(NOW + config.retentionMs + 1);
+    assert.equal(store.claimEvent('pending', NOW + config.retentionMs + 1), 'duplicate');
+    assert.equal(store.job(job.id)?.state, 'queued');
+  } finally { store.close(); }
+});

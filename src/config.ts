@@ -16,6 +16,7 @@ export interface Config {
   codex: { executable: string; args: string[]; cwd: string; transport?: 'exec' | 'app-server'; sendToolApprovalMode?: SendToolApprovalMode };
   stateDir: string;
   maxPending: number;
+  maxConcurrentTurns: number;
   maxInputChars: number;
   maxOutputChars: number;
   turnTimeoutMs: number;
@@ -27,7 +28,7 @@ export interface Config {
 }
 
 const defaults = {
-  maxPending: 20, maxInputChars: 12_000, maxOutputChars: 24_000,
+  maxPending: 20, maxConcurrentTurns: 4, maxInputChars: 12_000, maxOutputChars: 24_000,
   turnTimeoutMs: 300_000, queueTtlMs: 900_000,
   retentionMs: 7 * 86_400_000, maxRetainedEvents: 10_000,
 };
@@ -122,7 +123,7 @@ export function parseConfig(input: unknown): Config {
   const stateDir = privateDirectory(raw.stateDir, 'stateDir');
   const limits = { ...defaults };
   const bounds: Record<keyof typeof defaults, [number, number]> = {
-    maxPending: [1, 1000], maxInputChars: [1, 40_000], maxOutputChars: [100, 48_000],
+    maxPending: [1, 1000], maxConcurrentTurns: [1, 16], maxInputChars: [1, 40_000], maxOutputChars: [100, 48_000],
     turnTimeoutMs: [0, 1_800_000], queueTtlMs: [1000, 86_400_000],
     retentionMs: [60_000, 30 * 86_400_000], maxRetainedEvents: [10, 100_000],
   };

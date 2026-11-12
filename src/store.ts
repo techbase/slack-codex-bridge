@@ -14,6 +14,13 @@ export interface Job extends Scope {
   prompt: string | null;
   message_ts: string;
   state: JobState;
+  request_text: string;
+  request_truncated: number;
+  outcome_text: string;
+  outcome_truncated: number;
+  turn_id: string | null;
+  native_thread_id: string | null;
+  final_delivery: 'unknown' | 'sent' | 'uncertain';
   // Retain the schema's original column for the optional attachment notice.
   ack: 'pending' | 'sent' | 'uncertain' | 'skipped';
   delivery: Delivery;
@@ -22,7 +29,7 @@ export interface Job extends Scope {
   updated: number;
 }
 
-function safeDatabaseFile(file: string): void {
+export function safeDatabaseFile(file: string): void {
   try {
     const stat = lstatSync(file);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.uid !== process.getuid?.() || (stat.mode & 0o777) !== 0o600) {
@@ -59,7 +66,7 @@ export class Store {
       chmodSync(dbPath, 0o600);
       this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA secure_delete=ON; PRAGMA busy_timeout=1000');
       const version = (this.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
-      if (version !== 0 && version !== 1 && version !== 2) throw new SetupError('Unsupported state schema; use the matching Bridge version.');
+      if (version !== 0 && version !== 1 && version !== 2 && version !== 3) throw new SetupError('Unsupported state schema; use the matching Bridge version.');
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, created INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS sessions (
@@ -79,10 +86,17 @@ export class Store {
       `);
       const columns = this.db.prepare('PRAGMA table_info(jobs)').all() as { name: string }[];
       if (!columns.some(column => column.name === 'message_ts')) this.db.exec("ALTER TABLE jobs ADD COLUMN message_ts TEXT NOT NULL DEFAULT ''");
-      this.db.exec('PRAGMA user_version=2');
+      for (const [name, definition] of Object.entries({ request_text: "TEXT NOT NULL DEFAULT ''", request_truncated: 'INTEGER NOT NULL DEFAULT 0', outcome_text: "TEXT NOT NULL DEFAULT ''", outcome_truncated: 'INTEGER NOT NULL DEFAULT 0', turn_id: 'TEXT', native_thread_id: 'TEXT', final_delivery: "TEXT NOT NULL DEFAULT 'unknown'" })) {
+        if (!columns.some(column => column.name === name)) this.db.exec(`ALTER TABLE jobs ADD COLUMN ${name} ${definition}`);
+      }
+      this.db.exec("UPDATE jobs SET request_text=substr(prompt,1,4000),request_truncated=length(prompt)>4000 WHERE request_text='' AND prompt IS NOT NULL");
+      // Preserve admitted, unstarted requests. A pending/uncertain attachment
+      // notice cannot be safely replayed, and remains an explicit interruption.
+      this.db.prepare("UPDATE jobs SET state='interrupted', prompt=NULL, reason='ack_uncertain', updated=? WHERE state='queued' AND ack NOT IN ('sent','skipped')").run(now);
+      this.db.exec('PRAGMA user_version=3');
       this.db.prepare(`UPDATE jobs SET state='interrupted', prompt=NULL, reason='restart', updated=?
-        WHERE state IN ('queued','active')`).run(now);
-      this.db.exec(`UPDATE jobs SET delivery='uncertain' WHERE delivery IN ('pending','sending');
+        WHERE state='active'`).run(now);
+      this.db.exec(`UPDATE jobs SET delivery='uncertain' WHERE delivery='sending' OR (delivery='pending' AND state<>'queued');
         UPDATE jobs SET ack='uncertain' WHERE ack='pending'`);
       this.cleanup(now);
     } catch (error) {
@@ -100,13 +114,13 @@ export class Store {
     return 'new';
   }
 
-  enqueue(scope: Scope, eventId: string, user: string, prompt: string, now: number, messageTs = ''): Job | undefined {
+  enqueue(scope: Scope, eventId: string, user: string, prompt: string, now: number, messageTs = '', requestText = prompt): Job | undefined {
     const count = (this.db.prepare("SELECT count(*) AS n FROM jobs WHERE state IN ('queued','active')").get() as { n: number }).n;
     if (count >= this.config.maxPending) return;
     const id = randomUUID();
-    this.db.prepare(`INSERT INTO jobs (id,event_id,team,channel,root,project,user,prompt,state,ack,delivery,created,updated,message_ts)
-      VALUES (?,?,?,?,?,?,?,?,'queued','pending','pending',?,?,?)`)
-      .run(id, eventId, scope.team, scope.channel, scope.root, scope.project, user, prompt, now, now, messageTs);
+    this.db.prepare(`INSERT INTO jobs (id,event_id,team,channel,root,project,user,prompt,state,ack,delivery,created,updated,message_ts,request_text,request_truncated)
+      VALUES (?,?,?,?,?,?,?,?,'queued','pending','pending',?,?,?,?,?)`)
+      .run(id, eventId, scope.team, scope.channel, scope.root, scope.project, user, prompt, now, now, messageTs, requestText.slice(0, 4000), Number(requestText.length > 4000));
     return this.job(id)!;
   }
 
@@ -127,9 +141,12 @@ export class Store {
   activate(id: string, now: number): void {
     this.db.prepare("UPDATE jobs SET state='active',updated=? WHERE id=? AND state='queued'").run(now, id);
   }
-  finish(id: string, state: Exclude<JobState, 'queued' | 'active'>, reason: string | null, now: number): void {
-    this.db.prepare('UPDATE jobs SET state=?,prompt=NULL,reason=?,updated=? WHERE id=?').run(state, reason, now, id);
+  finish(id: string, state: Exclude<JobState, 'queued' | 'active'>, reason: string | null, now: number, outcome = ''): void {
+    this.db.prepare('UPDATE jobs SET state=?,prompt=NULL,reason=?,updated=?,outcome_text=?,outcome_truncated=? WHERE id=?').run(state, reason, now, outcome.slice(0, 4000), Number(outcome.length > 4000), id);
   }
+  saveJobThread(id: string, threadId: string, now: number): void { this.db.prepare('UPDATE jobs SET native_thread_id=?,updated=? WHERE id=?').run(threadId, now, id); }
+  saveTurn(id: string, turnId: string, now: number): void { this.db.prepare('UPDATE jobs SET turn_id=?,updated=? WHERE id=?').run(turnId, now, id); }
+  outcomeDelivery(id: string, state: 'sent' | 'uncertain'): void { this.db.prepare('UPDATE jobs SET final_delivery=? WHERE id=?').run(state, id); }
   delivery(id: string, state: Delivery): void { this.db.prepare('UPDATE jobs SET delivery=? WHERE id=?').run(state, id); }
   thread(scope: Scope): string | undefined {
     return (this.db.prepare('SELECT thread_id FROM sessions WHERE team=? AND channel=? AND root=? AND project=?')
@@ -147,7 +164,7 @@ export class Store {
   cleanup(now: number): void {
     const cutoff = now - this.config.retentionMs;
     this.db.prepare("DELETE FROM jobs WHERE state NOT IN ('queued','active') AND updated<?").run(cutoff);
-    this.db.prepare('DELETE FROM events WHERE created<?').run(cutoff);
+    this.db.prepare("DELETE FROM events WHERE created<? AND NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.event_id=events.id AND jobs.state IN ('queued','active'))").run(cutoff);
     this.db.prepare(`DELETE FROM sessions WHERE updated<? AND NOT EXISTS (
       SELECT 1 FROM jobs WHERE jobs.team=sessions.team AND jobs.channel=sessions.channel
       AND jobs.root=sessions.root AND jobs.project=sessions.project AND jobs.state IN ('queued','active'))`).run(cutoff);

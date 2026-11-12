@@ -8,6 +8,7 @@ export type SendMessage = (input: unknown) => Promise<SendResult>;
 /** A turn-scoped sender. Authorization happens here, beyond the MCP schema. */
 export class TurnSender {
   attempted = false;
+  outcomeDelivery: 'unknown' | 'sent' | 'uncertain' = 'unknown';
   private busy = false;
   private uncertain = false;
   private usedChars = 0;
@@ -23,9 +24,10 @@ export class TurnSender {
     if (this.busy) return { ok: false, message: 'A send is already in progress; wait for its result.' };
     if (!input || typeof input !== 'object' || Array.isArray(input)) return { ok: false, message: 'Invalid send_message arguments; nothing sent.' };
     const raw = input as Record<string, unknown>;
-    if (Object.keys(raw).some(key => !['text', 'destination'].includes(key)) || typeof raw.text !== 'string' || !raw.text.trim()
-        || (raw.destination !== undefined && typeof raw.destination !== 'string')) return { ok: false, message: 'Use text and an optional configured destination alias only; nothing sent.' };
+    if (Object.keys(raw).some(key => !['text', 'destination', 'kind'].includes(key)) || typeof raw.text !== 'string' || !raw.text.trim()
+        || (raw.destination !== undefined && typeof raw.destination !== 'string') || (raw.kind !== undefined && raw.kind !== 'progress' && raw.kind !== 'outcome')) return { ok: false, message: 'Use text and an optional configured destination alias only; nothing sent.' };
     const destination = raw.destination ?? 'thread';
+    if (raw.kind === 'outcome' && destination !== 'thread') return { ok: false, message: 'An outcome must target the originating thread; nothing sent.' };
     const channel = destination === 'thread' ? this.job.channel
       : Object.hasOwn(this.config.outgoingChannels, destination) ? this.config.outgoingChannels[destination] : undefined;
     if (this.job.team !== this.config.teamId || !this.config.incomingChannelIds.includes(this.job.channel) || !channel) {
@@ -36,13 +38,13 @@ export class TurnSender {
     this.usedChars += raw.text.length;
     this.busy = true;
     this.attempted = true;
-    const task = this.deliver(channel, destination === 'thread' ? this.job.root : undefined, raw.text);
+    const task = this.deliver(channel, destination === 'thread' ? this.job.root : undefined, raw.text, raw.kind === 'outcome');
     this.pending = task;
     try { return await task; }
     finally { this.busy = false; }
   };
 
-  private async deliver(channel: string, thread: string | undefined, text: string): Promise<SendResult> {
+  private async deliver(channel: string, thread: string | undefined, text: string, outcome: boolean): Promise<SendResult> {
     // Persist intent before the first API call. Restart never replays it.
     this.store.delivery(this.job.id, 'sending');
     // Finish before the MCP tool deadline even with many slow Slack chunks.
@@ -57,9 +59,11 @@ export class TurnSender {
       } };
       await sendText(guarded, channel, thread, text, this.secrets, this.config.maxOutputChars);
       this.store.delivery(this.job.id, 'sent');
+      if (outcome) { this.outcomeDelivery = 'sent'; this.store.outcomeDelivery(this.job.id, 'sent'); }
       return { ok: true, message: 'Message sent. Bridge will not repeat the final answer automatically.' };
     } catch {
       this.uncertain = true;
+      if (outcome) { this.outcomeDelivery = 'uncertain'; this.store.outcomeDelivery(this.job.id, 'uncertain'); }
       this.store.delivery(this.job.id, 'uncertain');
       return { ok: false, message: 'Delivery is uncertain and may have succeeded. Do not retry; further sends are disabled.' };
     }

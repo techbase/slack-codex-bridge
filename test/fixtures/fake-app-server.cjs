@@ -10,7 +10,11 @@ log({ start: { args: process.argv.slice(2), env: process.env, cwd: process.cwd()
 let thread = 'fixture-native-0001';
 let prompt = '';
 let waiting;
+let runtimeStatus = 'active';
+let turnStatus = 'inProgress';
+let statusReads = 0;
 function finish(status = 'completed') {
+  runtimeStatus = 'idle'; turnStatus = status;
   notify('item/completed', { threadId: thread, turnId: 'turn-1', item: { type: 'agentMessage', id: 'answer', text: 'Native final answer.', phase: 'final_answer' } });
   notify('turn/completed', { threadId: thread, turn: { id: 'turn-1', status } });
 }
@@ -21,6 +25,12 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   else if (m.method === 'thread/start' || m.method === 'thread/resume') {
     thread = m.params.threadId ?? thread;
     result(m.id, { thread: { id: thread } });
+  } else if (m.method === 'thread/read') {
+    statusReads++;
+    if (['reconcile-active', 'reconcile-notLoaded', 'reconcile-foreign'].includes(prompt) && statusReads > 1) finish();
+    result(m.id, { thread: { id: thread, status: { type: runtimeStatus } } });
+  } else if (m.method === 'thread/turns/list') {
+    result(m.id, { data: [{ id: prompt === 'reconcile-foreign' ? 'another-turn' : 'turn-1', status: turnStatus }], nextCursor: null });
   } else if (m.method === 'turn/start') {
     prompt = m.params.input[0].text.split('\n\nSlack message:\n').at(-1);
     notify('turn/started', { threadId: thread, turn: { id: 'turn-1' } });
@@ -32,9 +42,22 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       if (prompt === 'ignore-term') process.on('SIGTERM', () => {});
       return;
     }
+    if (prompt.startsWith('reconcile-') && prompt !== 'reconcile-waiting') {
+      runtimeStatus = prompt === 'reconcile-active' ? 'active' : prompt === 'reconcile-notLoaded' ? 'notLoaded' : 'idle';
+      turnStatus = prompt === 'reconcile-interrupted' || prompt === 'reconcile-active' || prompt === 'reconcile-notLoaded' || prompt === 'reconcile-foreign' ? 'interrupted' : prompt === 'reconcile-failed' ? 'failed' : 'completed';
+      if (['reconcile-completed', 'reconcile-poll'].includes(prompt)) notify('item/completed', { threadId: thread, turnId: 'turn-1', item: { type: 'agentMessage', id: 'answer', text: 'Native final answer.', phase: 'final_answer' } });
+      if (prompt !== 'reconcile-poll') notify('thread/status/changed', { threadId: thread, status: { type: 'idle' } });
+      return;
+    }
+    if (prompt === 'native-error' || prompt === 'foreign-native-error') {
+      notify('error', { threadId: thread, turnId: prompt === 'native-error' ? 'turn-1' : 'another-turn', willRetry: false, error: { message: 'PRIVATE native error' } });
+      if (prompt === 'foreign-native-error') finish();
+      return;
+    }
+    if (prompt === 'native-closed') { notify('thread/closed', { threadId: thread }); return; }
     const params = { threadId: prompt === 'wrong-thread' ? 'wrong' : thread, turnId: 'turn-1', itemId: 'item-1', reason: 'Fixture request' };
     let method;
-    if (['approval', 'wrong-thread', 'resolved', 'ignore-term-approval'].includes(prompt)) {
+    if (['approval', 'wrong-thread', 'resolved', 'ignore-term-approval', 'reconcile-waiting'].includes(prompt)) {
       if (prompt === 'ignore-term-approval') process.on('SIGTERM', () => {});
       method = 'item/commandExecution/requestApproval'; params.command = 'printf fixture'; params.cwd = process.cwd();
     }
