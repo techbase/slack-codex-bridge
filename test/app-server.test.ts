@@ -23,7 +23,7 @@ test('native sessions preserve configured argv, normal auth/environment, explici
   config.codex.args = ['--profile', 'fictional', '-c', 'approval_policy="on-request"'];
   Object.assign(env, { SLACK_BOT_TOKEN: 'xoxb-fictional', SLACK_APP_TOKEN: 'xapp-fictional', OPENAI_API_KEY: 'fictional-auth' });
   const ids: string[] = [];
-  const request = { project: config.codex.cwd, prompt: 'first', signal: new AbortController().signal, onThread: (id: string) => ids.push(id), sendMessage: noSend };
+  const request = { parentContext: { parentTs: '1800000000.000001', replyTs: '1800000000.000002', status: 'available' as const, text: 'Own-bot proposal: review Fixture Widget release notes.' }, project: config.codex.cwd, prompt: 'first', signal: new AbortController().signal, onThread: (id: string) => ids.push(id), sendMessage: noSend };
   assert.equal(await model.run(request), 'Native final answer.');
   assert.equal(await model.run({ ...request, threadId: ids[0], prompt: 'follow-up' }), 'Native final answer.');
   assert.deepEqual(ids, ['fixture-native-0001', 'fixture-native-0001']);
@@ -38,6 +38,7 @@ test('native sessions preserve configured argv, normal auth/environment, explici
     assert.equal(start.cwd, config.codex.cwd);
     assert.throws(() => process.kill(start.pid, 0), { code: 'ESRCH' });
   }
+  assert.match(records().find(r => r.method === 'turn/start').params.input[0].text, /Own-bot proposal: review Fixture Widget release notes/);
   const resume = records().find(r => r.method === 'thread/resume');
   assert.equal(resume.params.threadId, ids[0]);
   assert.equal(resume.params.excludeTurns, true);

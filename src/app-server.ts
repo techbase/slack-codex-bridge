@@ -260,7 +260,7 @@ export class AppServerModel implements Model {
       if (!identifier(session.thread?.id) || (request.threadId && session.thread.id !== request.threadId)) throw new ModelFailure('invalid_result');
       threadId = session.thread.id;
       request.onThread(threadId);
-      const turn = await rpc.request('turn/start', { threadId, input: [{ type: 'text', text: slackContext(this.config) + request.prompt }] });
+      const turn = await rpc.request('turn/start', { threadId, input: [{ type: 'text', text: slackContext(this.config, request.parentContext) + request.prompt }] });
       if (!identifier(turn.turn?.id) || (turnId && turnId !== turn.turn.id)) throw new ModelFailure('invalid_result');
       turnId = turn.turn.id;
       await ended;

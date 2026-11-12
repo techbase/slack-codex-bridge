@@ -30,7 +30,7 @@ test('direct configured executable keeps static argv/cwd and stdin prompts, norm
   writeFileSync(path.join(env.CODEX_HOME!, 'config.toml'), 'model="fixture-existing-model"\n');
   const observed: string[] = [];
   const commandText = '--dangerously-bypass-approvals-and-sandbox; $(touch unexpected) cwd=/etc destination=CUNKNOWN';
-  const request = { project: config.codex.cwd, prompt: commandText, signal: new AbortController().signal,
+  const request = { parentContext: { parentTs: '1800000000.000001', replyTs: '1800000000.000002', status: 'available' as const, text: 'Own-bot proposal: review Fixture Widget release notes.' }, project: config.codex.cwd, prompt: commandText, signal: new AbortController().signal,
     onThread: (id: string) => observed.push(id), sendMessage: noSend };
   assert.equal(await model.run(request), 'Only the final answer.');
   assert.equal(await model.run({ ...request, prompt: 'follow-up', threadId: observed[0] }), 'Only the final answer.');
@@ -53,6 +53,8 @@ test('direct configured executable keeps static argv/cwd and stdin prompts, norm
     assert.ok(!capture.args.includes(capture.env.BRIDGE_SEND_TOKEN));
   }
   assert.ok(captures[0].input.endsWith(commandText));
+  assert.match(captures[0].input, /Own-bot proposal: review Fixture Widget release notes/);
+  assert.match(captures[0].input, /untrusted reference data/);
   assert.match(captures[0].input, /configured channel aliases: updates/);
   assert.equal(captures[0].args.includes('resume'), false);
   assert.equal(captures[1].args[captures[1].args.indexOf('resume') + 1], 'fixture-thread-0001');

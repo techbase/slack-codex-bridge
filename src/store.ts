@@ -12,6 +12,7 @@ export interface Job extends Scope {
   event_id: string;
   user: string;
   prompt: string | null;
+  message_ts: string;
   state: JobState;
   // Retain the schema's original column for the optional attachment notice.
   ack: 'pending' | 'sent' | 'uncertain' | 'skipped';
@@ -58,7 +59,7 @@ export class Store {
       chmodSync(dbPath, 0o600);
       this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; PRAGMA secure_delete=ON; PRAGMA busy_timeout=1000');
       const version = (this.db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version;
-      if (version !== 0 && version !== 1) throw new SetupError('Unsupported state schema; use the matching Bridge version.');
+      if (version !== 0 && version !== 1 && version !== 2) throw new SetupError('Unsupported state schema; use the matching Bridge version.');
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, created INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS sessions (
@@ -70,12 +71,15 @@ export class Store {
           id TEXT PRIMARY KEY, event_id TEXT NOT NULL UNIQUE,
           team TEXT NOT NULL, channel TEXT NOT NULL, root TEXT NOT NULL, project TEXT NOT NULL,
           user TEXT NOT NULL, prompt TEXT, state TEXT NOT NULL, ack TEXT NOT NULL,
-          delivery TEXT NOT NULL, reason TEXT, created INTEGER NOT NULL, updated INTEGER NOT NULL
+          delivery TEXT NOT NULL, reason TEXT, created INTEGER NOT NULL, updated INTEGER NOT NULL,
+          message_ts TEXT NOT NULL DEFAULT ''
         );
         CREATE INDEX IF NOT EXISTS jobs_pending ON jobs(state, created);
         CREATE INDEX IF NOT EXISTS jobs_scope ON jobs(team, channel, root, project, created);
-        PRAGMA user_version=1;
       `);
+      const columns = this.db.prepare('PRAGMA table_info(jobs)').all() as { name: string }[];
+      if (!columns.some(column => column.name === 'message_ts')) this.db.exec("ALTER TABLE jobs ADD COLUMN message_ts TEXT NOT NULL DEFAULT ''");
+      this.db.exec('PRAGMA user_version=2');
       this.db.prepare(`UPDATE jobs SET state='interrupted', prompt=NULL, reason='restart', updated=?
         WHERE state IN ('queued','active')`).run(now);
       this.db.exec(`UPDATE jobs SET delivery='uncertain' WHERE delivery IN ('pending','sending');
@@ -96,13 +100,13 @@ export class Store {
     return 'new';
   }
 
-  enqueue(scope: Scope, eventId: string, user: string, prompt: string, now: number): Job | undefined {
+  enqueue(scope: Scope, eventId: string, user: string, prompt: string, now: number, messageTs = ''): Job | undefined {
     const count = (this.db.prepare("SELECT count(*) AS n FROM jobs WHERE state IN ('queued','active')").get() as { n: number }).n;
     if (count >= this.config.maxPending) return;
     const id = randomUUID();
-    this.db.prepare(`INSERT INTO jobs (id,event_id,team,channel,root,project,user,prompt,state,ack,delivery,created,updated)
-      VALUES (?,?,?,?,?,?,?,?,'queued','pending','pending',?,?)`)
-      .run(id, eventId, scope.team, scope.channel, scope.root, scope.project, user, prompt, now, now);
+    this.db.prepare(`INSERT INTO jobs (id,event_id,team,channel,root,project,user,prompt,state,ack,delivery,created,updated,message_ts)
+      VALUES (?,?,?,?,?,?,?,?,'queued','pending','pending',?,?,?)`)
+      .run(id, eventId, scope.team, scope.channel, scope.root, scope.project, user, prompt, now, now, messageTs);
     return this.job(id)!;
   }
 
