@@ -1,6 +1,5 @@
 // Fixed-command fixture only: no Slack connection, model calls or live actions.
 const fs = require('node:fs');
-const path = require('node:path');
 const [mode, capture, release, ...extra] = process.argv.slice(2);
 let text = '';
 process.stdin.setEncoding('utf8');
