@@ -105,6 +105,10 @@ to invoke Bridge. Do not configure aliases with inappropriate audiences.
 `codex.transport` is `"exec"` by default, or `"app-server"` for the native
 bidirectional stdio protocol. `codex.args` contains **global CLI options**, before
 the selected subcommand.
+An explicit `-c 'model_reasoning_effort="high"'` (or `--config`) also overrides
+saved reasoning on native resumed sessions and each new turn. Without an explicit
+reasoning override, resumed sessions retain their saved effort as before. This
+does not alter model selection, approvals, sandbox settings or global Codex config.
 Use separate argument/value entries, for example `["--profile", "slack"]` or
 `["--sandbox", "workspace-write", "--ask-for-approval", "never"]` only if those are
 your intended permissions. Supported value options are `--config`/`-c`,

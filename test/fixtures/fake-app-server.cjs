@@ -21,7 +21,7 @@ function finish(status = 'completed') {
 readline.createInterface({ input: process.stdin }).on('line', line => {
   const m = JSON.parse(line); log(m);
   if (m.method === 'initialize') result(m.id, { userAgent: 'fixture' });
-  else if (m.method === 'config/read') result(m.id, { config: { approval_policy: 'on-request', approvals_reviewer: 'user', sandbox_mode: 'workspace-write' } });
+  else if (m.method === 'config/read') result(m.id, { config: { approval_policy: 'on-request', approvals_reviewer: 'user', sandbox_mode: 'workspace-write', model_reasoning_effort: process.env.FIXTURE_REASONING_EFFORT ?? 'medium' } });
   else if (m.method === 'thread/start' || m.method === 'thread/resume') {
     thread = m.params.threadId ?? thread;
     result(m.id, { thread: { id: thread } });

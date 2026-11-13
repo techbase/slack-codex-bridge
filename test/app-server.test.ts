@@ -44,7 +44,27 @@ test('native sessions preserve configured argv, normal auth/environment, explici
   assert.equal(resume.params.excludeTurns, true);
   assert.equal(resume.params.approvalPolicy, 'on-request');
   assert.equal(resume.params.approvalsReviewer, 'user');
+  assert.equal(resume.params.config, undefined);
+  assert.ok(records().filter(r => r.method === 'turn/start').every(r => !Object.hasOwn(r.params, 'effort')));
   assert.equal(records().filter(r => r.method === 'turn/start')[1].params.input[0].text.endsWith('follow-up'), true);
+});
+
+test('explicit reasoning overrides apply on start, resume and each turn without changing other settings', async t => {
+  for (const flag of ['-c', '--config']) {
+    const { config, env, model, records } = fake(t);
+    config.codex.args = [flag, 'model_reasoning_effort="high"'];
+    env.FIXTURE_REASONING_EFFORT = 'high';
+    let id: string | undefined;
+    const request = { project: config.codex.cwd, prompt: 'first', signal: new AbortController().signal, onThread: (value: string) => { id = value; }, sendMessage: noSend };
+    assert.equal(await model.run(request), 'Native final answer.');
+    assert.equal(await model.run({ ...request, threadId: id, prompt: 'follow-up' }), 'Native final answer.');
+    for (const call of records().filter(r => r.method === 'thread/start' || r.method === 'thread/resume')) {
+      assert.deepEqual(call.params.config, { model_reasoning_effort: 'high' });
+      assert.equal(call.params.approvalPolicy, 'on-request');
+      assert.equal(call.params.sandbox, 'workspace-write');
+    }
+    assert.ok(records().filter(r => r.method === 'turn/start').every(r => r.params.effort === 'high'));
+  }
 });
 
 test('native approvals, file changes, permission grants, questions and MCP forms receive explicit human responses', async t => {
