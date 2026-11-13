@@ -621,3 +621,17 @@ test('a pending attachment notice preserves FIFO across roots sharing one native
   two.result.resolve('Second done.');
   await bridge.idle();
 });
+
+
+test('twenty-five independent turns run and the next admitted request waits for capacity', async t => {
+  const { bridge, model, store } = setup(t, { maxConcurrentTurns: 25, maxPending: 50 });
+  for (let i = 0; i < 26; i++) await bridge.accept(message('capacity-' + i, 'Independent request', { ts: '1800000000.' + String(i + 100).padStart(6, '0') }));
+  assert.equal(model.calls.length, 25);
+  assert.equal(store.queued().length, 1);
+  model.calls[0]!.result.resolve('First request finished.');
+  await model.started(26);
+  assert.equal(store.queued().length, 0);
+  for (const call of model.calls.slice(1)) call.result.resolve('Independent request finished.');
+  await bridge.idle();
+  assert.equal(store.unfinished().length, 0);
+});

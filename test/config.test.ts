@@ -9,7 +9,7 @@ test('configuration rejects ambiguous routing, obsolete policies, command inject
   const { config, root } = fixture(t);
   for (const invalid of [
     { teamId: '' }, { allowedUserIds: [] }, { incomingChannelIds: [] }, { operatorUserIds: ['UEVE'] },
-    { hostPolicyReviewed: true }, { codexHome: root }, { maxPending: 0 }, { maxConcurrentTurns: 0 }, { maxConcurrentTurns: 17 }, { mentionOnly: 'false' },
+    { hostPolicyReviewed: true }, { codexHome: root }, { maxPending: 0 }, { maxConcurrentTurns: 0 }, { maxConcurrentTurns: 65 }, { mentionOnly: 'false' },
     { retentionMs: 60_000, queueTtlMs: 61_000 }, { outgoingChannels: { thread: 'COTHER' } },
     { outgoingChannels: { arbitrary: 'not-an-id' } },
     { codex: { ...config.codex, cwd: 'relative' } },
@@ -54,5 +54,6 @@ test('the default permits four independent conversation turns and explicit limit
   const { config } = fixture(t);
   const raw: Record<string, unknown> = { ...config }; delete raw.maxConcurrentTurns;
   assert.equal(parseConfig(raw).maxConcurrentTurns, 4);
-  assert.equal(parseConfig({ ...raw, maxConcurrentTurns: 16 }).maxConcurrentTurns, 16);
+  assert.equal(parseConfig({ ...raw, maxConcurrentTurns: 25 }).maxConcurrentTurns, 25);
+  assert.equal(parseConfig({ ...raw, maxConcurrentTurns: 64 }).maxConcurrentTurns, 64);
 });
