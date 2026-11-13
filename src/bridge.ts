@@ -1,6 +1,6 @@
 import { humanMessage, humanMessageObservation, type HumanMessageResult } from './human-message.js';
 import { ModelFailure, type Model } from './codex.js';
-import type { Config } from './config.js';
+import { incomingChannelAllowed, type Config } from './config.js';
 import { sendText, type SlackSender } from './output.js';
 import { Store, type Job, type Scope } from './store.js';
 import { TurnSender } from './send.js';
@@ -31,6 +31,14 @@ export function route(config: Config, value: unknown, now: number): Routed | und
   const event = object(body?.event);
   const hasFiles = event?.subtype === 'file_share' || (Array.isArray(event?.files) && event.files.length > 0);
   const text = event?.text === undefined && hasFiles ? '' : event?.text;
+  // Socket Mode authenticates delivery. In joined mode require the configured
+  // bot's authorization and an actual channel event; never infer access from text.
+  if (config.incomingChannelMode === 'joined' &&
+      ((event?.channel_type !== 'channel' && event?.channel_type !== 'group') ||
+       !Array.isArray(body?.authorizations) || !body.authorizations.some(value => {
+         const auth = object(value);
+         return auth?.team_id === config.teamId && auth.user_id === config.botUserId && auth.is_bot === true;
+       }))) return;
   if (!body || !event || body.type !== 'event_callback' || body.team_id !== config.teamId
       || event.type !== 'message' || (event.subtype !== undefined && event.subtype !== 'file_share') || event.bot_id !== undefined
       || event.bot_profile !== undefined || event.hidden === true || event.edited !== undefined
@@ -38,7 +46,7 @@ export function route(config: Config, value: unknown, now: number): Routed | und
       || (event.user_team !== undefined && event.user_team !== config.teamId)
       || body.is_ext_shared_channel === true || event.is_ext_shared_channel === true
       || typeof event.user !== 'string' || event.user === config.botUserId || !config.allowedUserIds.includes(event.user)
-      || typeof event.channel !== 'string' || !config.incomingChannelIds.includes(event.channel)
+      || typeof event.channel !== 'string' || !incomingChannelAllowed(config, event.channel)
       || typeof body.event_id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(body.event_id)
       || typeof body.event_time !== 'number' || !Number.isSafeInteger(body.event_time)
       || body.event_time * 1000 < now - config.retentionMs || body.event_time * 1000 > now + 300_000
@@ -323,7 +331,7 @@ export class Bridge {
   private async reply(scope: Scope, text: string, jobId?: string): Promise<boolean> {
     try {
       const sender: SlackSender = { post: async message => {
-        if (scope.team !== this.config.teamId || !this.config.incomingChannelIds.includes(message.channel)
+        if (scope.team !== this.config.teamId || !incomingChannelAllowed(this.config, message.channel)
             || message.channel !== scope.channel || message.thread_ts !== scope.root) throw new Error('unauthorized_destination');
         await this.sender.post(message);
       } };

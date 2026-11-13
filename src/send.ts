@@ -1,4 +1,4 @@
-import type { Config } from './config.js';
+import { incomingChannelAllowed, type Config } from './config.js';
 import { sendText, slackChunks, type SlackSender } from './output.js';
 import type { Job, Store } from './store.js';
 
@@ -30,7 +30,7 @@ export class TurnSender {
     if (raw.kind === 'outcome' && destination !== 'thread') return { ok: false, message: 'An outcome must target the originating thread; nothing sent.' };
     const channel = destination === 'thread' ? this.job.channel
       : Object.hasOwn(this.config.outgoingChannels, destination) ? this.config.outgoingChannels[destination] : undefined;
-    if (this.job.team !== this.config.teamId || !this.config.incomingChannelIds.includes(this.job.channel) || !channel) {
+    if (this.job.team !== this.config.teamId || !incomingChannelAllowed(this.config, this.job.channel) || !channel) {
       return { ok: false, message: 'Destination is not allowed; nothing sent.' };
     }
     if (++this.calls > 10 || raw.text.length > this.config.maxOutputChars - this.usedChars) return { ok: false, message: 'Turn output limit reached; nothing sent.' };

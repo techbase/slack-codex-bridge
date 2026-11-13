@@ -148,7 +148,9 @@ is bounded JSON with optional `limit` (1–100) and opaque `cursor`. The respons
 Each job supplies its exact admitted route/actor/event, bounded text, transport
 state/reason, progress delivery, separate `outcomeDelivery`
 (`unknown|sent|uncertain`), native identities, timestamps and bounded outcome.
-Only records inside the current operator allowlists/cwd are exported. Unknown
+Only records inside the current operator incoming policy, user allowlist and cwd
+are exported. Joined mode exports admitted channel origins, including their
+retained history after removal; it never exports DMs. Unknown
 final-delivery evidence is never promoted from a progress post. Schema-1/2 reads
 do not migrate files and may lack historical text/outcome proof.
 

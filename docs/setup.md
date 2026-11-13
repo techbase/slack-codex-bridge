@@ -62,6 +62,18 @@ history scope from your app. There are no DM, `app_mention` or slash-command
 subscriptions. Do not add `chat:write.public`: invite the bot to every incoming
 and outgoing channel instead. Set team, bot-user and permitted human-user IDs
 explicitly. Bridge does not discover channels or expand access from Slack text.
+The default `incomingChannelMode: "allowlist"` requires `incomingChannelIds`.
+For invitation-based channel access, explicitly select `incomingChannelMode:
+"joined"`; the incoming list may then be empty or omitted. Existing
+`message.channels`/`message.groups` subscriptions and scopes suffice, with no
+channel-list/read permission or new membership-event subscription. Slack sends
+these bot events only for channels the bot has joined. Joined mode additionally
+requires a channel/group event authorized to the configured bot. Removing the
+bot stops new message delivery; already admitted work is not automatically
+cancelled. Other workspace/user/bot/shared-channel filters, `mentionOnly`, and
+explicit outgoing aliases remain in force. Hooks and snapshot consumers must
+honour the selected incoming policy rather than assuming every origin appears
+in the static list.
 
 The manifest sets `features.bot_user.always_online` to `true`, so new apps show
 Slack's green availability dot. For an existing app, open

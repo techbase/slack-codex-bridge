@@ -10,6 +10,8 @@ runtimes are deployment options. A separate macOS account is not a prerequisite.
 
 The operator configures one Slack workspace, incoming channel IDs, allowed human
 users, outgoing aliases/IDs, and a static executable/argument list/working directory.
+An optional joined-channel policy replaces the incoming ID list with the bot's
+channel membership, preserving allowed humans and fixed outgoing aliases.
 Ordinary new human messages trigger by default, with an optional mention-only mode.
 The CLI inherits normal authentication and configuration. Its existing settings
 and explicit operator preset own permissions; Bridge adds no execution policy.

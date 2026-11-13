@@ -9,6 +9,14 @@ A temporary loopback capability lets the MCP sender request only that turn's
 allowlisted sends; it is passed through environment, not process arguments.
 The capability expires when the invocation closes and carries no Slack token.
 
+Incoming channels default to an explicit allowlist. The optional `joined` policy
+uses Slack's authenticated channel/group message delivery to the configured bot
+as the invitation boundary, with the same workspace and allowed-human checks.
+It does not discover channels, accept DMs/shared channels, or add outgoing
+aliases. Anyone able to invite the bot can expose a channel to it, but only
+configured humans can trigger work. Removing the bot stops new events; existing
+admitted work is not cancelled. Persisted request history remains queryable.
+
 These are transport guarantees, **not a new execution sandbox**. Codex inherits
 your normal authentication/configuration, apps, MCP tools and consequential
 permissions. Bridge supplies no read-only policy, disables no existing tools,

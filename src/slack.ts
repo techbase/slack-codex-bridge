@@ -1,6 +1,6 @@
 import { App, LogLevel, type AppOptions, type Logger } from '@slack/bolt';
 import type { Bridge, Diagnostic } from './bridge.js';
-import { SetupError, type Config } from './config.js';
+import { incomingChannelAllowed, SetupError, type Config } from './config.js';
 import type { SlackSender } from './output.js';
 import type { ParentReader } from './parent-context.js';
 
@@ -46,7 +46,7 @@ export async function verifySlackIdentity(app: App, config: Config): Promise<voi
 export function slackParentReader(app: App, config: Config): ParentReader {
   return async (scope, replyTs, signal) => {
     const timestamp = /^\d{1,16}\.\d{6}$/;
-    if (scope.team !== config.teamId || !config.incomingChannelIds.includes(scope.channel)
+    if (scope.team !== config.teamId || !incomingChannelAllowed(config, scope.channel)
         || !timestamp.test(scope.root) || !timestamp.test(replyTs) || scope.root === replyTs) return;
     const base = { parentTs: scope.root, replyTs };
     try {
