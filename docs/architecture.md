@@ -45,7 +45,7 @@ or skipped, preserving the database schema and existing session state.
 Controls are deterministic and cancellation is requester/operator scoped.
 A conversation lane is keyed by workspace/channel/root/cwd. Each lane has one
 active turn; independent lanes run concurrently up to `maxConcurrentTurns`
-(default four, maximum sixteen). Different lanes sharing a saved native chat ID
+(default four, maximum sixty-four). Different lanes sharing a saved native chat ID
 also serialize. Native prompt/cancel scope stays exact. Accepted queue entries
 have no time-based execution expiry; admission remains bounded by `maxPending`.
 Attachment notices preserve FIFO within their lane without blocking other lanes.

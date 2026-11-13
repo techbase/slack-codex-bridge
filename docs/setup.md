@@ -160,8 +160,8 @@ edits Codex session files or chooses the global last session.
 
 | Setting | Default | Meaning |
 | --- | ---: | --- |
-| `maxPending` | 20 | Total queued plus active requests |
-| `maxConcurrentTurns` | 4 | Independent conversation lanes, 1–16; each native chat stays serial |
+| `maxPending` | 20 | Total queued plus active requests; set at least as high as the desired active concurrency |
+| `maxConcurrentTurns` | 4 | Independent conversation lanes, 1–64; each native chat stays serial |
 | `maxInputChars` | 12,000 | Incoming prompt limit in UTF-16 units |
 | `maxOutputChars` | 24,000 | Final fallback budget; total tool text budget per turn |
 | `turnTimeoutMs` | 300,000 | CLI turn deadline, including waiting for human input; `0` disables it explicitly |

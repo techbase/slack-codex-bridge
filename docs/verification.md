@@ -69,3 +69,9 @@ were exercised through real fixture processes/MCP clients. Lifecycle metadata
 does not authorize product work or native approvals. Qualification sent no extra
 live Slack messages or product actions. Live provider behavior, production
 completion-watch delivery and optional Docker packaging remain separate checks.
+
+## Larger configured concurrency — 13 November 2026
+
+The supported concurrency range is now 1–64; the conservative public default remains four. An isolated scheduler regression held 25 independent requests active, retained request 26 in the queue, and started it when capacity became available. Same-native-chat serialization remains covered by the existing suite. No 25-model production load test or live Slack test was performed.
+
+Clean npm ci, typecheck/build, all 137 tests and the required moderate-level audit passed. Two newly reported transitive advisories required compatible lockfile patch updates: @hono/node-server 2.1.3→2.1.8 and hono 4.13.12→4.13.18. Audit now reports zero advisories.
