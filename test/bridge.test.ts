@@ -486,6 +486,9 @@ test('a conversational follow-up withdraws multiple approvals together but bare 
   const call = await model.started(1);
   const results = Promise.allSettled([1, 2].map(i => call.request.interact!({ kind: 'approval', text: 'Fixture approval ' + i,
     instructions: 'Reply approve ID or deny ID', parse: action => action === 'approve' ? { accepted: true } : action === 'deny' ? { accepted: false } : undefined }, call.request.signal)));
+  await bridge.accept(message('ambiguous-natural', 'yes', { thread_ts: '1800000000.000001' }));
+  assert.match(slack.posts.at(-1)!.text, /Several native prompts/);
+  assert.equal(call.request.signal.aborted, false);
   await bridge.accept(message('ambiguous', 'approve', { thread_ts: '1800000000.000001' }));
   assert.match(slack.posts.at(-1)!.text, /Several native prompts/);
   assert.equal(call.request.signal.aborted, false);

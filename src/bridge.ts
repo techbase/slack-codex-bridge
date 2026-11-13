@@ -5,7 +5,7 @@ import { sendText, type SlackSender } from './output.js';
 import { Store, type Job, type Scope } from './store.js';
 import { TurnSender } from './send.js';
 import { randomBytes } from 'node:crypto';
-import type { Interaction } from './interaction.js';
+import { approvalReply, type Interaction } from './interaction.js';
 import type { ParentContext, ParentReader } from './parent-context.js';
 
 export interface Clock {
@@ -108,9 +108,10 @@ export class Bridge {
     if (/^(approve|deny|answer)\s+[a-f0-9]{24}(\s|$)/i.test(routed.prompt)) { await this.answerInteraction(routed); return; }
     const prompts = [...this.interactions.entries()].filter(([, p]) => !p.signal.aborted && p.job.team === routed.team
       && p.job.channel === routed.channel && p.job.root === routed.root && p.job.project === routed.project);
-    const promptControl = command === 'approve' || command === 'deny';
+    const promptControl = command === 'approve' || command === 'deny' ? command
+      : prompts.some(([, p]) => p.prompt.kind === 'approval') ? approvalReply(routed.prompt) : undefined;
     if (prompts.length === 1 && (promptControl || prompts[0]![1].prompt.kind === 'input')) {
-      const action = promptControl ? command : 'answer';
+      const action = promptControl ?? 'answer';
       await this.answerInteraction({ ...routed, prompt: `${action} ${prompts[0]![0]}${action === 'answer' ? ' ' + routed.prompt : ''}` });
       return;
     }
@@ -186,7 +187,9 @@ export class Bridge {
     // Consume before awaiting Slack. Duplicate or concurrent events cannot approve twice.
     this.interactions.delete(match![2]!);
     pending.resolve(answer);
-    await this.reply(scope, `Response submitted to Codex for prompt ${match![2]}. Use status to check the turn.`);
+    const action = match![1]!.toLowerCase();
+    await this.reply(scope, action === 'approve' ? 'Thanks—I’ve sent your approval.'
+      : action === 'deny' ? 'Understood—I’ve sent your refusal.' : 'Thanks—I’ve passed your answer along.');
   }
 
   private interaction(job: Job, prompt: Interaction, signal: AbortSignal): Promise<unknown> {

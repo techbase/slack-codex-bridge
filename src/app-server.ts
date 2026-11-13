@@ -123,8 +123,20 @@ export class AppServer {
 }
 
 function approval(text: string, accepted: unknown, declined: unknown): Interaction {
-  return { kind: 'approval', text, instructions: 'Reply `approve` or `deny` in this thread. With several pending prompts, use `approve ID` or `deny ID`. This grants only the scope shown above.',
+  return { kind: 'approval', text, instructions: 'Reply yes or go ahead to approve, or no to decline. You can also use `approve` or `deny`. With several pending prompts, use `approve ID` or `deny ID`. This grants only the scope shown above.',
     parse: action => action === 'approve' ? accepted : action === 'deny' ? declined : undefined };
+}
+
+function confirmationText(message: string): string {
+  const tool = /^Allow ([^\r\n]{1,80}) to run tool "([A-Za-z0-9_.-]{1,160})"\?$/.exec(message);
+  if (!tool) return message;
+  const parts = tool[2]!.split('.');
+  const normalize = (value: string) => value.replace(/[^a-z0-9]/gi, '').toLowerCase();
+  // Only remove a provider prefix already stated in the service name. Preserve
+  // the original question if a nested/unfamiliar name might hide real scope.
+  if (parts.length !== 2 || normalize(parts[0]!) !== normalize(tool[1]!)) return message;
+  const action = parts[1]!.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').toLowerCase();
+  return `May I use ${tool[1]}’s “${action}” action?`;
 }
 
 async function interact(request: ModelRequest, prompt: Interaction, signal: AbortSignal): Promise<unknown> {
@@ -179,6 +191,25 @@ async function nativePrompt(method: string, params: Json, item: Json | undefined
       { action: 'accept', content: null, _meta: null }, declined), signal);
     if (['form', 'openai/form', 'openaiForm'].includes(params.mode) && object(params.requestedSchema)) {
       const validate = new AjvJsonSchemaValidator().getValidator(params.requestedSchema);
+      const schema = params.requestedSchema;
+      // A canonical no-field form collects consent, not JSON data. Do not turn
+      // optional fields or compound/unknown constraints into an approval.
+      if (schema.type === 'object' && object(schema.properties) && Object.keys(schema.properties).length === 0
+          && (schema.required === undefined || Array.isArray(schema.required) && schema.required.length === 0)
+          && (schema.additionalProperties === undefined || schema.additionalProperties === false)
+          && Object.keys(schema).every(key => ['type', 'properties', 'required', 'additionalProperties', '$schema', 'title', 'description'].includes(key))
+          && validate({}).valid && typeof params.message === 'string' && params.message.trim()) {
+        const accepted = { action: 'accept', content: {}, _meta: null };
+        const prompt = approval(confirmationText(params.message), accepted, declined);
+        const parse = prompt.parse;
+        prompt.parse = (action, text) => {
+          if (action === 'answer') {
+            try { const content = JSON.parse(text); if (object(content) && Object.keys(content).length === 0) return accepted; } catch {}
+          }
+          return parse(action, text);
+        };
+        return interact(request, prompt, signal);
+      }
       return interact(request, { kind: 'input', text: `*${params.serverName} requests input*\n${params.message}\n\nRequested JSON fields:\n${JSON.stringify(params.requestedSchema, null, 2)}`,
         instructions: 'Reply with the requested JSON object, or `deny`, in this thread. With several pending prompts, use `answer ID {"field":"value"}` or `deny ID`. Keep credentials out of Slack.',
         parse: (action, text) => {
