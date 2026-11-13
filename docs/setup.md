@@ -84,6 +84,15 @@ is static for Events API/Socket Mode apps: the dot remains green even if Bridge
 stops. It is not a connection or health check. No extra presence scope or polling
 is needed; disable the setting if you prefer the default away indicator.
 
+No-field MCP permission forms appear as ordinary yes/no requests rather than
+JSON schemas. In a thread with one live approval, its requester or an operator
+may reply `yes`, `go ahead` or `no`; existing `approve`/`deny` commands still work.
+Only short unconditional replies count. A question or conditional instruction
+withdraws the pending approval and continues the same conversation without
+granting permission. Multiple prompts require their explicit IDs. Forms with
+actual fields or compound constraints retain schema validation and are not
+silently treated as permission grants.
+
 **Migrating an old app:** update subscriptions/scopes from the former
 `app_mention`/`app_mentions:read` manifest, reinstall/re-authorize the app to grant
 history scopes, and invite it to the configured channels. Changing repository

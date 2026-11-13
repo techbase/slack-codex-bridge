@@ -5,6 +5,7 @@ import test, { type TestContext } from 'node:test';
 import { AppServer, AppServerModel } from '../src/app-server.js';
 import { Bridge } from '../src/bridge.js';
 import { ModelFailure, preflight } from '../src/codex.js';
+import { approvalReply } from '../src/interaction.js';
 import { Store } from '../src/store.js';
 import { deferred, fixture, ManualClock, message, NOW, RecordingSlack } from './helpers.js';
 
@@ -242,7 +243,7 @@ function waitingBridge(t: TestContext, capacity?: number) {
 }
 
 test('ordinary follow-ups withdraw every native approval family and resume the same chat without granting or replaying', async t => {
-  for (const kind of ['approval', 'files', 'permissions', 'url']) await t.test(kind, async t => {
+  for (const kind of ['approval', 'files', 'permissions', 'url', 'empty-form']) await t.test(kind, async t => {
     const f = waitingBridge(t);
     await f.bridge.accept(message('start', kind));
     const id = await f.posted.promise;
@@ -265,6 +266,62 @@ test('ordinary follow-ups withdraw every native approval family and resume the s
     await f.bridge.accept(message('obsolete', 'approve ' + id, { thread_ts: f.scope.root }));
     assert.equal(f.records().filter(r => r.method === 'turn/start').length, 2);
     assert.match(f.slack.posts.at(-1)!.text, /No matching live prompt/);
+  });
+});
+
+test('natural approval replies are short and unconditional; questions and conditions remain conversation', () => {
+  for (const text of ['yes', 'Yes!', 'Yes, please.', 'go ahead', 'Yes, go ahead', 'Approved']) assert.equal(approvalReply(text), 'approve');
+  for (const text of ['no', 'No, thanks.', 'denied']) assert.equal(approvalReply(text), 'deny');
+  for (const text of ['Yes?', 'approve if checks pass', 'Yes, but only after review', 'Why is approval needed? If it is, go ahead', 'yes\nonly if safe', 'okay', 'thanks']) assert.equal(approvalReply(text), undefined);
+});
+
+test('no-field permission forms ask a human question and keep the exact native accept/decline contract', async t => {
+  for (const mode of ['empty-form', 'empty-form-openai', 'empty-form-camel']) {
+    const f = fake(t);
+    await f.model.run({ project: f.config.codex.cwd, prompt: mode, signal: new AbortController().signal, onThread() {}, sendMessage: noSend,
+      interact: async prompt => {
+        assert.equal(prompt.kind, 'approval');
+        assert.match(prompt.text, /May I use Fixture Calendar/);
+        assert.match(prompt.text, /cancel scheduled post/);
+        assert.doesNotMatch(prompt.text, /JSON|properties|fixture_apps/);
+        assert.match(prompt.instructions, /yes or go ahead/);
+        assert.deepEqual(prompt.parse('deny', ''), { action: 'decline', content: null, _meta: null });
+        assert.deepEqual(prompt.parse('answer', '{}'), { action: 'accept', content: {}, _meta: null });
+        assert.equal(prompt.parse('answer', '{"unexpected":"data"}'), undefined);
+        return prompt.parse('approve', '');
+      } });
+    assert.deepEqual(f.records().find(r => r.answer).answer, { action: 'accept', content: {}, _meta: null });
+  }
+  for (const mode of ['optional-form', 'constrained-form', 'dynamic-form']) {
+    const f = fake(t);
+    await f.model.run({ project: f.config.codex.cwd, prompt: mode, signal: new AbortController().signal, onThread() {}, sendMessage: noSend,
+      interact: async prompt => {
+        assert.equal(prompt.kind, 'input');
+        assert.equal(prompt.parse('approve', ''), undefined);
+        return prompt.parse('deny', '');
+      } });
+  }
+});
+
+test('plain yes/no answer only the live permission for its requester; conditional questions never grant it', async t => {
+  for (const reply of ['yes', 'go ahead', 'no', 'Why is permission needed? If it is, go ahead']) await t.test(reply, async t => {
+    const f = waitingBridge(t);
+    await f.bridge.accept(message('start', 'empty-form'));
+    await f.posted.promise;
+    await f.bridge.accept(message('other-person', 'yes', { user: 'UBOB', thread_ts: f.scope.root }));
+    assert.equal(f.records().filter(r => r.answer).length, 0);
+    await f.bridge.accept(message('response', reply, { thread_ts: f.scope.root }));
+    await f.bridge.idle();
+    const answers = f.records().filter(r => r.answer);
+    if (reply.startsWith('Why')) {
+      assert.equal(answers.length, 0);
+      assert.equal(f.records().filter(r => r.method === 'turn/start').length, 2);
+      assert.doesNotMatch(f.slack.posts.map(p => p.text).join('\n'), /Invalid prompt response/);
+    } else {
+      assert.equal(answers.length, 1);
+      assert.deepEqual(answers[0].answer, reply === 'no' ? { action: 'decline', content: null, _meta: null } : { action: 'accept', content: {}, _meta: null });
+      assert.equal(f.records().filter(r => r.method === 'turn/start').length, 1);
+    }
   });
 });
 

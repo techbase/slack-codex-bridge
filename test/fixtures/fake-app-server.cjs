@@ -36,6 +36,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     notify('turn/started', { threadId: thread, turn: { id: 'turn-1' } });
     result(m.id, { turn: { id: 'turn-1' } });
     notify('item/completed', { threadId: thread, turnId: 'turn-1', item: { type: 'reasoning', text: 'PRIVATE reasoning' } });
+    notify('item/completed', { threadId: thread, turnId: 'turn-1', item: { type: 'agentMessage', phase: 'commentary', text: 'PRIVATE commentary; this is not a Slack reply.' } });
     if (prompt === 'exit-failure') { process.stderr.write('PRIVATE provider diagnostics'); process.exit(1); }
     if (prompt === 'malformed') { process.stdout.write('PRIVATE invalid JSON\n'); return; }
     if (prompt === 'hold' || prompt === 'ignore-term') {
@@ -70,6 +71,11 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       params.questions = [{ id: prompt === 'question-key' ? '__proto__' : 'choice', question: 'Which option?', isSecret: prompt === 'secret', isOther: false, options: [{ label: 'One', description: 'First' }, { label: 'Two', description: 'Second' }] }];
     } else if (prompt === 'url') { method = 'mcpServer/elicitation/request'; params.mode = 'url'; params.serverName = 'fixture'; params.message = 'Complete the fictional connection'; params.url = 'https://example.invalid/connect'; }
     else if (prompt === 'form') { method = 'mcpServer/elicitation/request'; params.mode = 'form'; params.serverName = 'fixture'; params.message = 'Tool confirmation'; params.requestedSchema = { type: 'object', properties: { decision: { type: 'string', enum: ['accept', 'decline'] } }, required: ['decision'] }; }
+    else if (['empty-form', 'empty-form-openai', 'empty-form-camel', 'optional-form', 'constrained-form', 'dynamic-form'].includes(prompt)) {
+      method = 'mcpServer/elicitation/request'; params.mode = prompt === 'empty-form-openai' ? 'openai/form' : prompt === 'empty-form-camel' ? 'openaiForm' : 'form';
+      params.serverName = 'fixture_apps'; params.message = 'Allow Fixture Calendar to run tool "fixture_calendar.cancel_scheduled_post"?';
+      params.requestedSchema = { type: 'object', properties: prompt === 'optional-form' ? { note: { type: 'string' } } : {}, ...(prompt === 'constrained-form' ? { minProperties: 1 } : {}), ...(prompt === 'dynamic-form' ? { additionalProperties: { type: 'string' } } : {}) };
+    }
     else if (prompt === 'unknown') method = 'item/unrecognized/requestApproval';
     else { finish(prompt === 'failed' ? 'failed' : 'completed'); return; }
     waiting = 41;
