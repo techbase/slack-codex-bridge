@@ -4,6 +4,7 @@
   "allowedUserIds": ["UALICE", "UOPERATOR"],
   "operatorUserIds": ["UOPERATOR"],
   "incomingChannelIds": ["CPROJECT"],
+  "incomingChannelMode": "allowlist",
   "outgoingChannels": { "updates": "CUPDATES" },
   "mentionOnly": false,
   "codex": {

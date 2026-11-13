@@ -35,8 +35,12 @@ export function readBridgeSnapshot(config: Config, value: SnapshotInput = {}, no
     const names = new Set((db.prepare('PRAGMA table_info(jobs)').all() as { name: string }[]).map(row => row.name));
     const optional = (name: string, fallback: string) => names.has(name) ? 'j.' + name : fallback;
     const marks = (values: string[]) => values.map(() => '?').join(',');
-    const where = ['j.team=?', 'j.project=?', 'j.channel IN (' + marks(config.incomingChannelIds) + ')', 'j.user IN (' + marks(config.allowedUserIds) + ')'];
-    const parameters: (string | number)[] = [config.teamId, config.codex.cwd, ...config.incomingChannelIds, ...config.allowedUserIds];
+    // Rows are admitted origins, not a new source of channel access. Joined mode
+    // retains their history while still excluding DMs, other users/workspaces/cwds.
+    const joined = config.incomingChannelMode === 'joined';
+    const channels = joined ? "(length(j.channel) BETWEEN 3 AND 31 AND substr(j.channel,1,1) IN ('C','G') AND j.channel NOT GLOB '*[^A-Z0-9]*')" : 'j.channel IN (' + marks(config.incomingChannelIds) + ')';
+    const where = ['j.team=?', 'j.project=?', channels, 'j.user IN (' + marks(config.allowedUserIds) + ')'];
+    const parameters: (string | number)[] = [config.teamId, config.codex.cwd, ...(joined ? [] : config.incomingChannelIds), ...config.allowedUserIds];
     if (after) { where.push('(j.created>? OR (j.created=? AND j.id>?))'); parameters.push(after[0], after[0], after[1]); }
     const sql = 'SELECT j.*, ' + optional('request_text', "substr(coalesce(j.prompt,''),1,4000)") + ' AS snapshot_text, '
       + optional('request_truncated', "length(coalesce(j.prompt,''))>4000") + ' AS snapshot_text_truncated, '

@@ -11,6 +11,13 @@ permissions. It does not create a new account or sandbox, change your Codex
 configuration, or silently enable bypass flags. Give Slack access only to people
 you trust to use that Codex runtime. Claude CLI and Pi CLI are not supported yet.
 
+By default, incoming channels use an explicit allowlist. Set
+`incomingChannelMode: "joined"` to listen in public/private channels when the bot
+is invited, without updating channel IDs or restarting for each invitation.
+The same workspace, permitted-human and mention settings still apply. Replies
+stay in the originating thread; cross-channel sends still require configured
+outgoing aliases. DMs and externally shared channels remain excluded.
+
 Set `codex.transport` to `"app-server"` for native Codex sessions with approvals
 and questions relayed through Slack. Reply in the same thread with `approve`,
 `deny`, or the requested answer. Only the requester or a configured operator may
