@@ -44,10 +44,11 @@ test('OS releases instance lock after a child process is killed; durable active 
   const script = `import {Store} from ${JSON.stringify(storeUrl)};
     const config=JSON.parse(process.argv[1]); const store=new Store(config,${NOW});
     const job=store.enqueue({team:config.teamId,channel:'CPROJECT',root:'1800000000.000001',project:config.codex.cwd},'crash','UALICE','fixture prompt',${NOW});
-    store.activate(job.id,${NOW}); process.stdout.write('locked\\n'); setInterval(()=>{},1000);`;
-  const child = spawn(process.execPath, ['--input-type=module', '-e', script, JSON.stringify(config)], { env: { ...process.env, OPENSSL_CONF: '/dev/null' }, stdio: ['ignore', 'pipe', 'pipe'] });
+    store.activate(job.id,${NOW}); process.send('locked'); setInterval(()=>{},1000);`;
+  const child = spawn(process.execPath, ['--input-type=module', '-e', script, JSON.stringify(config)], { env: { ...process.env, OPENSSL_CONF: '/dev/null' }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
   t.after(() => { if (child.exitCode === null) child.kill('SIGKILL'); });
-  await once(child.stdout, 'data');
+  const [ready] = await once(child, 'message');
+  assert.equal(ready, 'locked');
   assert.throws(() => new Store(config, NOW), /Another Bridge instance/);
   const exit = once(child, 'exit'); child.kill('SIGKILL'); await exit;
   const reopened = new Store(config, NOW + 1);
