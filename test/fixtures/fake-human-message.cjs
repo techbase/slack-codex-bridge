@@ -1,6 +1,5 @@
 // Fixed-command fixture only: no Slack connection, model calls or live actions.
 const fs = require('node:fs');
-const path = require('node:path');
 const [mode, capture, release, ...extra] = process.argv.slice(2);
 let text = '';
 process.stdin.setEncoding('utf8');
@@ -26,8 +25,11 @@ process.stdin.on('end', () => {
   if (mode === 'large-response') { process.stdout.write(JSON.stringify({ handled: true, response: 'x'.repeat(16001) })); return; }
   if (mode === 'fail') { process.stderr.write('PRIVATE provider diagnostics'); process.exitCode = 1; return; }
   if (mode === 'gate' && envelope.text === 'First question') {
-    const watcher = fs.watch(path.dirname(release), () => { if (fs.existsSync(release)) { watcher.close(); answer(); } });
-    if (fs.existsSync(release)) { watcher.close(); answer(); }
+    // Wait for the actual release file, not a potentially coalesced parent-
+    // directory notification. The predicate also handles creation before watch.
+    const released = () => { if (fs.existsSync(release)) { fs.unwatchFile(release); answer(); } };
+    fs.watchFile(release, { interval: 10 }, released);
+    released();
     return;
   }
   answer();

@@ -259,6 +259,13 @@ export class AppServerModel implements Model {
       // Passing effective config also replaces stale exec-session permission settings on resume.
       const settings = await rpc.request('config/read', { cwd: this.config.codex.cwd, includeLayers: false });
       const params: Json = { cwd: this.config.codex.cwd };
+      // Native resume can retain the saved effort despite CLI overrides. Honour
+      // an explicit operator override for both this session and every new turn;
+      // leave saved effort alone when only inherited defaults are present.
+      const overridesEffort = this.config.codex.args.some((arg, i, args) =>
+        (arg === '-c' || arg === '--config') && args[i + 1]?.startsWith('model_reasoning_effort='));
+      const effort = overridesEffort ? settings.config?.model_reasoning_effort : undefined;
+      if (effort !== undefined) params.config = { model_reasoning_effort: effort };
       if (settings.config?.approval_policy !== undefined) params.approvalPolicy = settings.config.approval_policy;
       if (settings.config?.approvals_reviewer !== undefined) params.approvalsReviewer = settings.config.approvals_reviewer;
       if (settings.config?.sandbox_mode !== undefined) params.sandbox = settings.config.sandbox_mode;
@@ -267,7 +274,7 @@ export class AppServerModel implements Model {
       if (!identifier(session.thread?.id) || (request.threadId && session.thread.id !== request.threadId)) throw new ModelFailure('invalid_result');
       threadId = session.thread.id;
       request.onThread(threadId);
-      const turn = await rpc.request('turn/start', { threadId, input: [{ type: 'text', text: slackContext(this.config, request.parentContext, request.extensionContext) + request.prompt }] });
+      const turn = await rpc.request('turn/start', { threadId, ...(effort === undefined ? {} : { effort }), input: [{ type: 'text', text: slackContext(this.config, request.parentContext, request.extensionContext) + request.prompt }] });
       if (!identifier(turn.turn?.id) || (turnId && turnId !== turn.turn.id)) throw new ModelFailure('invalid_result');
       turnId = turn.turn.id;
       request.onTurn?.(turnId);
